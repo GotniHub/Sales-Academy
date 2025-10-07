@@ -5,3 +5,4 @@ plotly
 matplotlib
 streamlit-option-menu
 Pillow
+openpyxl
