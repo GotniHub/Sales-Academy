@@ -68,7 +68,7 @@ pu_data = {
     "stéphane pean": 400,
     "julie larue": 650,
     "dennis comunian": 400,
-    "norbert macia": 600,
+    "norbert macia": 533.33,
     "toshihiko ikezaki": 600,
     "flavie launaire": 900,
     "stéphane skeirik": 700,
@@ -76,7 +76,8 @@ pu_data = {
     "thierry riva": 1500,
     "sylvie zhang": 200,
     "cédric jumel": 800,
-    "jean philippe rost": 900,    # Ajoutez plus de formateurs si nécessaire
+    "jean philippe rost": 900, 
+    "lionel gerfaud": 1000,   # Ajoutez plus de formateurs si nécessaire
 }
 
 # Données par défaut pour PU / FORMATION en fonction de la Population (pour 1.5 jours)
@@ -292,7 +293,55 @@ elif selected == "RAPPORT FINANCE":
     else:
         st.error("Veuillez d'abord importer et calculer les données dans 'Importation & Calculs'.")
         st.stop()
+    # ====== OUTILS COMMUNS (à définir 1 seule fois) ======
 
+    def normalize_bu(bu):
+        if isinstance(bu, str):
+            return bu.strip().upper().replace("É", "E")
+        return bu
+
+    bu_mapping = {
+        "ALLEMAGNE": "ALLEMAGNE",
+        "APAC - CHINE": "APAC CHINE",
+        "ESPAGNE": "ESPAGNE",
+        "EUROPE DU NORD": "EUROPE DU NORD",
+        "FRANCE": "FRANCE",
+        "FRANCE_TÉLÉVENTE": "FRANCE",
+        "FRANCE WEISS": "FRANCE",
+        "FRANCE  KAM GAM": "FRANCE",
+        "France KAM GAM": "FRANCE",
+        "ITALIE": "ITALIE",
+        "JAPON": "JAPON",
+        "RETAIL INTERNATIONAL": "RETAIL",
+        "CORPORATE GIFTING": "RETAIL",
+        "MAISONS": "ALL",
+        "USA - CANADA": "USA CANADA"
+    }
+    bu_mapping_norm = {normalize_bu(k): normalize_bu(v) for k, v in bu_mapping.items()}
+
+    def get_participants_par_bu(df_participants: pd.DataFrame) -> pd.DataFrame:
+        """Retourne un DF: BU_clean | Nb Participants (uniques Nom+Prénom)"""
+        dfp = df_participants.copy()
+        dfp["BU_clean"] = dfp["Groupes"].apply(normalize_bu).replace(bu_mapping_norm)
+        dfp["Nom"] = dfp["Nom"].astype(str).str.strip().str.upper()
+        dfp["Prénom"] = dfp["Prénom"].astype(str).str.strip().str.upper()
+
+        dfp_unique = dfp.drop_duplicates(subset=["BU_clean", "Nom", "Prénom"])
+
+        out = dfp_unique["BU_clean"].value_counts().reset_index()
+        out.columns = ["BU_clean", "Nb Participants"]
+        return out
+    
+    df_participants = None
+    if "calendar_file" in st.session_state:
+        try:
+            df_participants = pd.read_excel(
+                st.session_state["calendar_file"],
+                sheet_name="BDD Participants 2025",
+                header=2
+            )
+        except Exception:
+            df_participants = None
     df_ta = pd.read_excel(st.session_state["calendar_file"], sheet_name="TA 2025")
 
     df_form["BU"] = df_form["BU"].astype(str).str.strip()
@@ -342,10 +391,10 @@ elif selected == "RAPPORT FINANCE":
         "CA réalisé": "Coût (Réel)"
     })
 
-    ta_count["CA (Budget)"] = ta_count["Type de TA"].map(ta_budget_data).fillna(0) * ta_count["Nb TA"]
+    ta_count["CA"] = ta_count["Type de TA"].map(ta_budget_data).fillna(0) * ta_count["Nb TA"]
 
     ta_pivot = ta_count.pivot(index="BU", columns="Type de TA", values="Nb TA").fillna(0)
-    ta_budget = ta_count.groupby("BU")[["CA (Budget)", "Coût (Réel)"]].sum().reset_index()
+    ta_budget = ta_count.groupby("BU")[["CA", "Coût (Réel)"]].sum().reset_index()
 
     merged = form_count.groupby("BU").agg({
         "Nb Formations": "sum",
@@ -357,14 +406,14 @@ elif selected == "RAPPORT FINANCE":
     merged = merged.merge(ta_budget, on="BU", how="left").fillna(0)
     merged = merged.merge(ta_pivot, on="BU", how="left").fillna(0)
 
-    merged["Budget Total"] = merged["Budget (Formation)"] + merged["CA (Budget)"]
+    merged["Budget Total"] = merged["Budget (Formation)"] + merged["CA"]
     merged["Réel Total"] = merged["Réel (Formation)"] + merged["Coût (Réel)"]
 
     # st.subheader("🧾 Vue consolidée par BU")
     # st.dataframe(merged.style.format({
     #     "Budget (Formation)": "{:,.2f} €",
     #     "Réel (Formation)": "{:,.2f} €",
-    #     "CA (Budget)": "{:,.2f} €",
+    #     "CA": "{:,.2f} €",
     #     "Coût (Réel)": "{:,.2f} €",
     #     "Budget Total": "{:,.2f} €",
     #     "Réel Total": "{:,.2f} €"
@@ -390,8 +439,10 @@ elif selected == "RAPPORT FINANCE":
     """, unsafe_allow_html=True)
     
     # Initialisation des onglets
-    tab1, tab2, tab3, tab4 = st.tabs(["📘 Formations par BU", "📙 TA par BU","📊 Ventilation Budgets", "📉 Rentabilité WSA"])
+    tab1, tab2, tab3 = st.tabs(["📘 Formations par BU", "📙 TA par BU", "📉 Rentabilité WSA"])
 
+    def blue_row_style(row):
+        return ['background-color: rgba(0, 51, 160, 0.3)' for _ in row]
 
     with tab1: 
             # ----------- 🔹 Bloc 1 : Formations seules -----------
@@ -399,22 +450,51 @@ elif selected == "RAPPORT FINANCE":
             # Sauvegarder une version non filtrée pour les KPI globaux
         df_form_original = df_form.copy()  # sauvegarde complète pour les totaux
             # Widgets de filtre de date
-        start_date, end_date = st.date_input("📅 Filtrer par Date de début", [min_date, max_date], key="date_range_bu")
+        date_range = st.date_input(
+            "📅 Filtrer par Date de début et fin",
+            value=[min_date, max_date],
+            key="date_range_bu"
+        )
 
-        # Déclaration du filtre BU
-        bu_form_list = sorted(df_form["BU"].dropna().unique())
-        selected_bu_form = st.multiselect("Filtrer les Formations par BU", options=bu_form_list, default=bu_form_list, key="form_bu_filter")
+        # 🛡️ Sécurité : l'utilisateur doit choisir une période complète
+        if not isinstance(date_range, (list, tuple)) or len(date_range) != 2:
+            st.sidebar.info("ℹ️ Merci de sélectionner une **date de fin** pour appliquer le filtre.")
+            st.stop()
 
-        # Calcul AVANT de filtrer
-        nb_formations_global = df_form_original["Module"].count()
+        start_date, end_date = date_range
 
-        # ➤ Maintenant filtre
-        df_form = df_form[df_form["BU"].isin(selected_bu_form)]
-        # Appliquer le filtre de dates
-        df_form = df_form[
-            (df_form["Date de début"] >= pd.Timestamp(start_date)) &
-            (df_form["Date de début"] <= pd.Timestamp(end_date))
-        ]
+
+        # ✅ Base intacte (ne pas toucher df_form directement)
+        df_form_base = df_form_original.copy()
+
+        # ✅ 1) Filtre date d'abord (toutes BU)
+        df_form_date = df_form_base[
+            (df_form_base["Date de début"] >= pd.Timestamp(start_date)) &
+            (df_form_base["Date de début"] <= pd.Timestamp(end_date))
+        ].copy()
+
+        # ✅ 2) Liste BU dépendante de la période
+        bu_form_list = sorted(df_form_date["BU"].dropna().unique())
+
+        # ✅ 3) Multiselect BU (par défaut = toutes les BU de la période)
+        selected_bu_form = st.multiselect(
+            "Filtrer les Formations par BU",
+            options=bu_form_list,
+            default=bu_form_list,
+            key=f"form_bu_filter_{start_date}_{end_date}"
+)
+
+
+        # ✅ 4) Appliquer BU sur les données déjà filtrées date
+        df_form = df_form_date[df_form_date["BU"].isin(selected_bu_form)].copy()
+
+        # ✅ Référence globale (toutes BU) = uniquement date
+        df_form_ref = df_form_date.copy()
+
+        # (optionnel) total global (si tu veux garder un KPI global)
+        nb_formations_global = df_form_base["Module"].count()
+
+
 
         df_ta = df_ta[
             (df_ta["Date de début"] >= pd.Timestamp(start_date)) &
@@ -423,6 +503,19 @@ elif selected == "RAPPORT FINANCE":
 
         # ➤ Calcul après filtre
         nb_formations_filtrées = df_form["Module"].count()
+
+        # ✅ KPI Nb formations (dynamique car df_form est déjà filtré BU + dates)
+        # ✅ Réalisées dans la BU filtrée
+        nb_realisees_filtre = df_form[df_form["Maintenue / Annulée"] == "Réalisée"]["Module"].count()
+
+        # ✅ Réalisées globales (toutes BU) mais sur la même période (df_form_ref)
+        nb_realisees_total = df_form_base[df_form_base["Maintenue / Annulée"].isin(["Réalisée","Maintenue"])]["Module"].count()
+
+
+
+
+        pourcentage_formations = (nb_realisees_filtre / nb_realisees_total) * 100 if nb_realisees_total != 0 else 0
+
 
 
         st.subheader("Indicateurs Clés")
@@ -475,20 +568,23 @@ elif selected == "RAPPORT FINANCE":
         }).reset_index().rename(columns={
             "Module": "Nb Formations",
             "Nb participant": "Nb Participants",
-            "CA": "CA (Budget)",
+            "CA": "CA",
             "Cout formateur": "Coût (Réel)"
         })
         # Exclure la ligne "Total" si déjà concaténée
         df_kpi = ventilation_form[ventilation_form["BU"] != "Total"]
         # Calcul des totaux AVANT ajout de la ligne Total
-        total_ca = ventilation_form["CA (Budget)"].sum()
+        total_ca = ventilation_form["CA"].sum()
         total_reel = ventilation_form["Coût (Réel)"].sum()
         total_formations = ventilation_form["Nb Formations"].sum()
         percentage_budget_used = (total_reel / total_ca) * 100 if total_ca != 0 else 0
         # Solde restant et %
         solde_restant = total_ca - total_reel
         percentage_budget_remaining = (solde_restant / total_ca ) * 100 if total_ca  != 0 else 0
-        pourcentage_formations = (nb_formations_filtrées / nb_formations_global) * 100 if nb_formations_global != 0 else 0
+        # pourcentage_formations = (nb_formations_filtrées / nb_formations_global) * 100 if nb_formations_global != 0 else 0
+        df_form["Maintenue / Annulée"] = df_form["Maintenue / Annulée"].astype(str).str.strip()
+        df_form_ref["Maintenue / Annulée"] = df_form_ref["Maintenue / Annulée"].astype(str).str.strip()
+        df_form_base["Maintenue / Annulée"] = df_form_base["Maintenue / Annulée"].astype(str).str.strip()
 
 
         def get_delta_class(delta):
@@ -498,7 +594,7 @@ elif selected == "RAPPORT FINANCE":
             st.markdown(f"""
             <div class="card">
                 <h2>{total_ca:,.2f} €</h2>
-                <p>Total CA (Budget)</p>
+                <p>Total CA réalisé</p>
                 <div class="delta positive">100%</div>
             </div>
             """, unsafe_allow_html=True)
@@ -507,7 +603,7 @@ elif selected == "RAPPORT FINANCE":
             st.markdown(f"""
             <div class="card">
                 <h2>{total_reel:,.2f} €</h2>
-                <p>Total Coût (Réel)</p>
+                <p>Total Coût Formateur </p>
                 <div class="delta {get_delta_class(percentage_budget_used)}">{percentage_budget_used:.0f}%</div>
             </div>
             """, unsafe_allow_html=True)
@@ -523,12 +619,13 @@ elif selected == "RAPPORT FINANCE":
         with col4:
             st.markdown(f"""
             <div class="card">
-            <h2>{nb_formations_filtrées} / {nb_formations_global}</h2>
-            <p>Nb de Formations</p>
-            <div class="delta positive">{pourcentage_formations:.0f}%</div>
-
+                <h2>{nb_realisees_filtre} / {nb_realisees_total}</h2>
+                <p>Nb de Formations (Réalisées)</p>
+                <div class="delta positive">{pourcentage_formations:.0f}%</div>
             </div>
             """, unsafe_allow_html=True)
+
+
         with col5:
             # 🎯 Filtre optionnel par population pour analyse
             populations = df_form["Population"].dropna().unique()
@@ -558,69 +655,81 @@ elif selected == "RAPPORT FINANCE":
             """, unsafe_allow_html=True)
 
 
-        # # ➕ Affichage dans une nouvelle carte KPI
-        # col5, _ = st.columns([1, 3])
-        # with col5:
-        #     st.markdown(f"""
-        #     <div class="card">
-        #         <h2>{cout_moyen_filtered:,.2f} €</h2>
-        #         <p>Coût moyen / participant</p>
-        #     </div>
-        #     """, unsafe_allow_html=True)
+        # --- Ventilation Formations par BU (avec Nb Participants corrigé via df_participants) ---
 
+        # 1) Base ventilation (Formations / CA / Coût)
+        ventilation_form = (
+            df_form.assign(BU_clean=df_form["BU"].apply(normalize_bu))
+            .groupby("BU_clean")
+            .agg(
+                **{
+                    "Nb Formations": ("Module", "count"),
+                    "CA": ("CA", lambda x: pd.to_numeric(x.astype(str).str.replace("€", "").str.replace(",", ""), errors="coerce").sum()),
+                    "Coût Formateur": ("Cout formateur", lambda x: pd.to_numeric(x.astype(str).str.replace("€", "").str.replace(",", ""), errors="coerce").sum()),
+                }
+            )
+            .reset_index()
+        )
 
+        # 2) Ajouter Nb Participants si df_participants dispo
+        if df_participants is not None:
+            participants_par_bu = get_participants_par_bu(df_participants)  # BU_clean | Nb Participants
+            ventilation_form = ventilation_form.merge(participants_par_bu, on="BU_clean", how="left")
+            ventilation_form["Nb Participants"] = ventilation_form["Nb Participants"].fillna(0).astype(int)
+        else:
+            ventilation_form["Nb Participants"] = 0
 
-        ventilation_form = df_form.groupby(["BU"]).agg({
-            "Module": "count",
-            "Nb participant": lambda x: pd.to_numeric(x, errors="coerce").sum(),
-            "CA": lambda x: pd.to_numeric(x.astype(str).str.replace("€", "").str.replace(",", ""), errors="coerce").sum(),
-            "Cout formateur": lambda x: pd.to_numeric(x.astype(str).str.replace("€", "").str.replace(",", ""), errors="coerce").sum()
-        }).reset_index().rename(columns={
-            "Module": "Nb Formations",
-            "Nb participant": "Nb Participants",
-            "CA": "CA (Budget)",
-            "Cout formateur": "Coût (Réel)"
-        })
+        # 3) Renommer BU_clean -> BU pour affichage
+        ventilation_form = ventilation_form.rename(columns={"BU_clean": "BU"})
+        ventilation_form = ventilation_form[["BU", "Nb Formations", "Nb Participants", "CA", "Coût Formateur"]]
+
         st.subheader("Ventilation Formations par BU")
         # ➕ Ligne de total
         total_form = pd.DataFrame({
             "BU": ["Total"],
             "Nb Formations": [ventilation_form["Nb Formations"].sum()],
             "Nb Participants": [ventilation_form["Nb Participants"].sum()],
-            "CA (Budget)": [ventilation_form["CA (Budget)"].sum()],
-            "Coût (Réel)": [ventilation_form["Coût (Réel)"].sum()]
+            "CA": [ventilation_form["CA"].sum()],
+            "Coût Formateur": [ventilation_form["Coût Formateur"].sum()]
         })
 
         ventilation_form = pd.concat([ventilation_form, total_form], ignore_index=True)
         # ➕ Calculs des colonnes supplémentaires
-        ventilation_form["Rentabilité"] = ventilation_form["CA (Budget)"] - ventilation_form["Coût (Réel)"]
+        ventilation_form["Rentabilité"] = ventilation_form["CA"] - ventilation_form["Coût Formateur"]
 
-        ventilation_form["% Ecart"] = ventilation_form.apply(
-            lambda row: (row["Rentabilité"] / row["CA (Budget)"]) * 100 if row["CA (Budget)"] != 0 else 0,
+        ventilation_form["% Rentabilité"] = ventilation_form.apply(
+            lambda row: (row["Rentabilité"] / row["CA"]) * 100 if row["CA"] != 0 else 0,
             axis=1
         )
         ventilation_form["Coût moyen par participant"] = ventilation_form.apply(
-            lambda row: row["Coût (Réel)"] / row["Nb Participants"] if row["Nb Participants"] > 0 else 0,
+            lambda row: row["Coût Formateur"] / row["Nb Participants"] if row["Nb Participants"] > 0 else 0,
             axis=1
         )
 
-        st.dataframe(ventilation_form.style.format({
-            "CA (Budget)": "{:,.2f} €",
-            "Coût (Réel)": "{:,.2f} €",
-            "Rentabilité": "{:,.2f} €",
-            "% Ecart": "{:.0f} %",
-            "Nb Formations": "{:.0f}",
-            "Nb Participants": "{:.0f}",
-            "Coût moyen par participant": "{:,.2f} €"
-        }))
+        styled_ventilation_form = (
+            ventilation_form.style
+            .apply(blue_row_style, axis=1)   # ✅ couleur sur chaque ligne
+            .format({
+                "CA": "{:,.2f} €",
+                "Coût Formateur": "{:,.2f} €",
+                "Rentabilité": "{:,.2f} €",
+                "% Rentabilité": "{:.0f} %",
+                "Nb Formations": "{:.0f}",
+                "Nb Participants": "{:.0f}",
+                "Coût moyen par participant": "{:,.2f} €"
+            })
+        )
+
+        st.dataframe(styled_ventilation_form, use_container_width=True)
+
         # Préparation des colonnes
-        ventilation_form["Solde Restant"] = ventilation_form["CA (Budget)"] - ventilation_form["Coût (Réel)"]
+        ventilation_form["Rentabilité"] = ventilation_form["CA"] - ventilation_form["Coût Formateur"]
 
         # Créer un DataFrame "long" pour barres groupées
-        df_bar = ventilation_form[ventilation_form["BU"] != "Total"][["BU", "CA (Budget)", "Coût (Réel)", "Solde Restant"]]
+        df_bar = ventilation_form[ventilation_form["BU"] != "Total"][["BU", "CA", "Coût Formateur", "Rentabilité"]]
         df_bar_long = df_bar.melt(id_vars="BU", var_name="Type", value_name="Montant (€)")
 
-        st.subheader("Comparatif Budget / Réel / Maintenu à réaliser par BU")
+        st.subheader("Comparatif [ CA / Coût Formateur / Rentabilité par BU ]")
         fig = px.bar(
             df_bar_long,
             x="BU",
@@ -629,9 +738,9 @@ elif selected == "RAPPORT FINANCE":
             barmode="group",
             text_auto=".2s",
             color_discrete_map={
-                "CA (Budget)": "#0033A0",       # Bleu
+                "CA": "#0033A0",       # Bleu
                 "Coût (Réel)": "#FF6666",       # Rouge clair
-                "Solde Restant": "#4CAF50"      # Vert
+                "Rentabilité": "#4CAF50"      # Vert
             }
         )
         fig.update_layout(xaxis_tickangle=-45)
@@ -645,11 +754,11 @@ elif selected == "RAPPORT FINANCE":
         df_monthly_form["Cout formateur"] = pd.to_numeric(df_monthly_form["Cout formateur"].astype(str).str.replace("€", "").str.replace(",", ""), errors="coerce").fillna(0)
 
         df_grouped_form = df_monthly_form.groupby("Mois")[["CA", "Cout formateur"]].sum().sort_index().cumsum().reset_index()
-        df_grouped_form = df_grouped_form.rename(columns={"CA": "Budget Cumulé", "Cout formateur": "Réel Cumulé"})
+        df_grouped_form = df_grouped_form.rename(columns={"CA": "CA Cumulé", "Cout formateur": "Cout formateur Cumulé"})
 
         df_form_long = df_grouped_form.melt(id_vars="Mois", var_name="Type", value_name="Montant (€)")
 
-        st.subheader("📈 Évolution CA vs Réel cumulé (Formations)")
+        st.subheader("📈 Évolution CA vs Coût formateur cumulé (Formations)")
         fig_form = px.line(
             df_form_long,
             x="Mois",
@@ -658,8 +767,8 @@ elif selected == "RAPPORT FINANCE":
             markers=True,
             text="Montant (€)",
             color_discrete_map={
-                "Budget Cumulé": "#66B2FF",
-                "Réel Cumulé": "#0033A0"
+                "Cout formateur Cumulé": "#66B2FF",
+                "CA Cumulé": "#0033A0"
             }
         )
         fig_form.update_traces(texttemplate="%{text:,.0f} €", textposition="top right")
@@ -676,20 +785,46 @@ elif selected == "RAPPORT FINANCE":
 
         # 1. Sauvegarder la version non filtrée pour KPI global
         df_ta_original = df_ta.copy()
-        # Widgets de filtre de date
-        start_date, end_date = st.date_input("📅 Filtrer par Date de début", [min_date, max_date], key="date_range_bu_ta")
-        # 2. Appliquer filtre BU sur TA
-        bu_ta_list = sorted(df_ta["BU"].dropna().unique())
-        selected_bu_ta = st.multiselect("Filtrer les TA par BU", options=bu_ta_list, default=bu_ta_list, key="ta_bu_filter")
-        # 👉 APPLIQUE les filtres AVANT de faire ta_count
-        df_ta["Date de début"] = df_ta["Date de début"].apply(convert_trimestre_to_date)
+        # 1) garder une base intacte
+        df_ta_base = df_ta_original.copy()
 
-        # 1. Filtrer d'abord
-        df_ta = df_ta[
-            (df_ta["BU"].isin(selected_bu_ta)) &
-            (df_ta["Date de début"] >= pd.Timestamp(start_date)) &
-            (df_ta["Date de début"] <= pd.Timestamp(end_date))
-        ]
+        # 2) toujours convertir la date sur la base (IMPORTANT)
+        df_ta_base["Date de début"] = df_ta_base["Date de début"].apply(convert_trimestre_to_date)
+
+        # 3) filtre date
+        date_range = st.date_input(
+            "📅 Filtrer par Date de début et fin",
+            value=[min_date, max_date],
+            key="date_range_bu_taa"
+        )
+
+        # 🛡️ Sécurité : l'utilisateur doit choisir une période complète
+        if not isinstance(date_range, (list, tuple)) or len(date_range) != 2:
+            st.sidebar.info("ℹ️ Merci de sélectionner une **date de fin** pour appliquer le filtre.")
+            st.stop()
+
+        start_date, end_date = date_range
+
+
+        df_ta_date = df_ta_base[
+            (df_ta_base["Date de début"] >= pd.Timestamp(start_date)) &
+            (df_ta_base["Date de début"] <= pd.Timestamp(end_date))
+        ].copy()
+
+        # 4) liste BU dépendante de la période
+        bu_ta_list = sorted(df_ta_date["BU"].dropna().unique())
+
+        # 5) multiselect BU (par défaut = toutes les BU de la période)
+        selected_bu_ta = st.multiselect(
+            "Filtrer les TA par BU",
+            options=bu_ta_list,
+            default=bu_ta_list,
+            key="ta_bu_filter"
+        )
+
+        # 6) appliquer BU sur les données déjà filtrées date
+        df_ta = df_ta_date[df_ta_date["BU"].isin(selected_bu_ta)].copy()
+
 
 
         # 3. Calcul global vs filtré
@@ -705,13 +840,13 @@ elif selected == "RAPPORT FINANCE":
         }).reset_index().rename(columns={
             "Participant": "Nb TA",
             "Nb jours": "Nb jours TA",
-            "CA réalisé": "Coût (Réel)"
+            "CA réalisé": "Coût Formateur"
         })
 
-        ta_count_filtered["CA (Budget)"] = ta_count_filtered["Type de TA"].map(ta_budget_data).fillna(0) * ta_count_filtered["Nb TA"]
+        ta_count_filtered["CA"] = ta_count_filtered["Type de TA"].map(ta_budget_data).fillna(0) * ta_count_filtered["Nb TA"]
 
         # Ventilation par BU
-        ventilation_ta = ta_count_filtered.groupby("BU")[["CA (Budget)", "Coût (Réel)"]].sum().reset_index()
+        ventilation_ta = ta_count_filtered.groupby("BU")[["CA", "Coût Formateur"]].sum().reset_index()
 
         # TA par type
         obs_ta = ta_count_filtered[ta_count_filtered["Type de TA"] == "observation"].set_index("BU")["Nb TA"]
@@ -722,7 +857,7 @@ elif selected == "RAPPORT FINANCE":
         ventilation_ta["Nb TA Suivi"] = ventilation_ta["BU"].map(suivi_ta).fillna(0).astype(int)
 
         # Réorganiser
-        ventilation_ta = ventilation_ta[["BU", "Nb TA Observation", "Nb TA Suivi", "CA (Budget)", "Coût (Réel)"]]
+        ventilation_ta = ventilation_ta[["BU", "Nb TA Observation", "Nb TA Suivi", "CA", "Coût Formateur"]]
 
         st.subheader("Indicateurs Clés")
 
@@ -730,8 +865,8 @@ elif selected == "RAPPORT FINANCE":
         df_kpi_ta = ventilation_ta[ventilation_ta["BU"] != "Total"]
 
         # Calculs principaux
-        total_ca_ta = df_kpi_ta["CA (Budget)"].sum()
-        total_reel_ta = df_kpi_ta["Coût (Réel)"].sum()
+        total_ca_ta = df_kpi_ta["CA"].sum()
+        total_reel_ta = df_kpi_ta["Coût Formateur"].sum()
         total_ta_obs = df_kpi_ta["Nb TA Observation"].sum()
         total_ta_suivi = df_kpi_ta["Nb TA Suivi"].sum()
         total_ta = total_ta_obs + total_ta_suivi
@@ -751,7 +886,7 @@ elif selected == "RAPPORT FINANCE":
             st.markdown(f"""
             <div class="card">
                 <h2>{total_ca_ta:,.2f} €</h2>
-                <p>Total CA (Budget)</p>
+                <p>Total CA réalisé</p>
                 <div class="delta positive">100%</div>
             </div>
             """, unsafe_allow_html=True)
@@ -760,7 +895,7 @@ elif selected == "RAPPORT FINANCE":
             st.markdown(f"""
             <div class="card">
                 <h2>{total_reel_ta:,.2f} €</h2>
-                <p>Total Coût (Réel)</p>
+                <p>Total Coût Formateur</p>
                 <div class="delta {get_delta_class(percentage_used_ta)}">{percentage_used_ta:.0f}%</div>
             </div>
             """, unsafe_allow_html=True)
@@ -778,7 +913,7 @@ elif selected == "RAPPORT FINANCE":
             st.markdown(f"""
             <div class="card">
                 <h2>{nb_ta_filtrées} / {nb_ta_global}</h2>
-                <p>Nb Total de TA</p>
+                <p>Nb Total de TA (Réalisées)</p>
                 <div class="delta positive">{pourcentage_ta:.0f}%</div>
             </div>
             """, unsafe_allow_html=True)
@@ -788,37 +923,44 @@ elif selected == "RAPPORT FINANCE":
             "BU": ["Total"],
             "Nb TA Observation": [ventilation_ta["Nb TA Observation"].sum()],
             "Nb TA Suivi": [ventilation_ta["Nb TA Suivi"].sum()],
-            "CA (Budget)": [ventilation_ta["CA (Budget)"].sum()],
-            "Coût (Réel)": [ventilation_ta["Coût (Réel)"].sum()]
+            "CA": [ventilation_ta["CA"].sum()],
+            "Coût Formateur": [ventilation_ta["Coût Formateur"].sum()]
         })
 
         ventilation_ta = pd.concat([ventilation_ta, total_ta], ignore_index=True)
 
         # Ajouter colonne Maintenu (à réaliser) = Budget - Réel
-        ventilation_ta["Rentabilité"] = ventilation_ta["CA (Budget)"] - ventilation_ta["Coût (Réel)"]
+        ventilation_ta["Rentabilité"] = ventilation_ta["CA"] - ventilation_ta["Coût Formateur"]
 
         # Ajouter % Écart = Maintenu / Budget
-        ventilation_ta["% Ecart"] = ventilation_ta.apply(
-            lambda row: (row["Rentabilité"] / row["CA (Budget)"]) * 100 if row["CA (Budget)"] != 0 else 0,
+        ventilation_ta["% Rentabilité"] = ventilation_ta.apply(
+            lambda row: (row["Rentabilité"] / row["CA"]) * 100 if row["CA"] != 0 else 0,
             axis=1
         )
 
-        st.dataframe(ventilation_ta.style.format({
-            "CA (Budget)": "{:,.2f} €",
-            "Coût (Réel)": "{:,.2f} €",
-            "Nb TA Observation": "{:.0f}",
-            "Nb TA Suivi": "{:.0f}",
-            "Rentabilité": "{:,.2f} €",
-            "% Ecart": "{:.0f} %",
-        }))
+        # ✅ style bleu + format €
+        st.dataframe(
+            ventilation_ta.style
+                .apply(blue_row_style, axis=1)
+                .format({
+                    "CA": "{:,.2f} €",
+                    "Coût Formateur": "{:,.2f} €",
+                    "Rentabilité": "{:,.2f} €",
+                    "% Rentabilité": "{:.0f} %",
+                    "Nb TA Observation": "{:.0f}",
+                    "Nb TA Suivi": "{:.0f}",
+                }),
+            use_container_width=True
+        )
+
         # ➕ Préparer les colonnes
-        ventilation_ta["Solde Restant"] = ventilation_ta["CA (Budget)"] - ventilation_ta["Coût (Réel)"]
+        ventilation_ta["Rentabilité"] = ventilation_ta["CA"] - ventilation_ta["Coût Formateur"]
 
         # ➕ Graphique : Barres groupées pour Budget, Réel et Solde
-        df_bar_ta = ventilation_ta[ventilation_ta["BU"] != "Total"][["BU", "CA (Budget)", "Coût (Réel)", "Solde Restant"]]
+        df_bar_ta = ventilation_ta[ventilation_ta["BU"] != "Total"][["BU", "CA", "Coût Formateur", "Rentabilité"]]
         df_bar_ta_long = df_bar_ta.melt(id_vars="BU", var_name="Type", value_name="Montant (€)")
 
-        st.subheader("Comparatif Budget / Réel / Maintenu à réaliser par BU (TA)")
+        st.subheader("Comparatif TA [ CA / Coût Formateur / Rentabilité par BU ]")
         fig_ta = px.bar(
             df_bar_ta_long,
             x="BU",
@@ -827,9 +969,9 @@ elif selected == "RAPPORT FINANCE":
             barmode="group",
             text_auto=".2s",
             color_discrete_map={
-                "CA (Budget)": "#0033A0",       # Bleu
-                "Coût (Réel)": "#FF6666",       # Rouge clair
-                "Solde Restant": "#4CAF50"      # Vert
+                "CA": "#0033A0",       # Bleu
+                "Coût Formateur": "#FF6666",       # Rouge clair
+                "Rentabilité": "#4CAF50"      # Vert
             }
         )
         fig_ta.update_layout(xaxis_tickangle=-45)
@@ -838,15 +980,15 @@ elif selected == "RAPPORT FINANCE":
         df_monthly_ta = df_ta.copy()
         df_monthly_ta["Mois"] = df_monthly_ta["Date de début"].dt.to_period("M").dt.to_timestamp()
 
-        df_monthly_ta["CA (Budget)"] = df_monthly_ta["Type de TA"].map(ta_budget_data).fillna(0)
-        df_monthly_ta["Coût (Réel)"] = df_monthly_ta["Nb jours"] * df_monthly_ta["Coût unitaire"]
+        df_monthly_ta["CA"] = df_monthly_ta["Type de TA"].map(ta_budget_data).fillna(0)
+        df_monthly_ta["Coût Formateur"] = df_monthly_ta["Nb jours"] * df_monthly_ta["Coût unitaire"]
 
-        df_grouped_ta = df_monthly_ta.groupby("Mois")[["CA (Budget)", "Coût (Réel)"]].sum().sort_index().cumsum().reset_index()
-        df_grouped_ta = df_grouped_ta.rename(columns={"CA (Budget)": "Budget Cumulé", "Coût (Réel)": "Réel Cumulé"})
+        df_grouped_ta = df_monthly_ta.groupby("Mois")[["CA", "Coût Formateur"]].sum().sort_index().cumsum().reset_index()
+        df_grouped_ta = df_grouped_ta.rename(columns={"CA": "CA Cumulé", "Coût Formateur": "Coût Formateur Cumulé"})
 
         df_ta_long = df_grouped_ta.melt(id_vars="Mois", var_name="Type", value_name="Montant (€)")
 
-        st.subheader("📈 Évolution CA vs Réel cumulé (TA)")
+        st.subheader("📈 Évolution CA vs Coût formateur cumulé (TA)")
         fig_ta = px.line(
             df_ta_long,
             x="Mois",
@@ -855,8 +997,8 @@ elif selected == "RAPPORT FINANCE":
             markers=True,
             text="Montant (€)",
             color_discrete_map={
-                "Budget Cumulé": "#66B2FF",
-                "Réel Cumulé": "#0033A0"
+                "Coût Formateur Cumulé": "#66B2FF",
+                "CA Cumulé": "#0033A0"
             }
         )
         fig_ta.update_traces(texttemplate="%{text:,.0f} €", textposition="top right")
@@ -864,8 +1006,7 @@ elif selected == "RAPPORT FINANCE":
         st.plotly_chart(fig_ta, use_container_width=True)
 
     with tab3:
-
-        # --- Mise en forme avec couleurs personnalisées
+                # --- Mise en forme avec couleurs personnalisées
         def highlight_type(row):
             color = ""
             if row["Type"] == "TA":
@@ -886,10 +1027,12 @@ elif selected == "RAPPORT FINANCE":
         df_form["BU"] = df_form["BU"].apply(normalize_bu)
         df_ta["BU"] = df_ta["BU"].apply(normalize_bu)
 
-        st.subheader("Ventilation Budgets T1 par BU")
+        # st.subheader("Ventilation Budgets T1 par BU")
 
-        # --- INPUT modifiable : Budget total Ingénierie ---
-        budget_t1_inge = st.number_input("💼 Budget T1 - Ingénierie (modifiable)", value=101000, step=1000)
+        # # --- INPUT modifiable : Budget total Ingénierie ---
+        # budget_t1_inge = st.number_input("💼 Budget T1 - Ingénierie (modifiable)", value=101000, step=1000)
+        budget_t1_inge = 101000  # valeur fixe, sans affichage UI
+
         # 1. Harmoniser les noms de BU (majuscule standardisée)
         df_form["BU_clean"] = df_form["BU"].str.upper().str.strip()
         df_ta["BU_clean"] = df_ta["BU"].str.upper().str.strip()
@@ -904,12 +1047,12 @@ elif selected == "RAPPORT FINANCE":
         # Ajouter colonne BU_clean
         df_ta["BU_clean"] = df_ta["BU"].str.upper().str.strip()
 
-        # Calcul du CA (Budget) TA si pas déjà présent
-        df_ta["CA (Budget)"] = df_ta["Type de TA"].map(ta_budget_data).fillna(0)
+        # Calcul du CA TA si pas déjà présent
+        df_ta["CA"] = df_ta["Type de TA"].map(ta_budget_data).fillna(0)
 
         # Groupement propre avec nom de BU nettoyé
         ta_budget = (
-            df_ta.groupby("BU_clean")["CA (Budget)"]
+            df_ta.groupby("BU_clean")["CA"]
             .sum()
             .to_dict()
         )
@@ -962,112 +1105,112 @@ elif selected == "RAPPORT FINANCE":
 
 
 
-        # --- Affichage
-        st.dataframe(styled_budget)
+        # # --- Affichage
+        # st.dataframe(styled_budget)
+        
+        # col1,col2=st.columns([1,2])
+        # with col1:
+        # st.subheader("Rentabilité par Formateur")
+        # Nettoyage des données
+        df_form["Cout formateur"] = pd.to_numeric(df_form["Cout formateur"].astype(str).str.replace("€", "").str.replace(",", ""), errors="coerce")
+        df_form["CA"] = pd.to_numeric(df_form["CA"].astype(str).str.replace("€", "").str.replace(",", ""), errors="coerce")
+        df_form["Formateur 1"] = df_form["Formateur 1"].astype(str).str.strip().str.title()
 
-    with tab4:
-        col1,col2=st.columns([1,2])
-        with col1:
-            st.subheader("Rentabilité par Formateur")
-            # Nettoyage des données
-            df_form["Cout formateur"] = pd.to_numeric(df_form["Cout formateur"].astype(str).str.replace("€", "").str.replace(",", ""), errors="coerce")
-            df_form["CA"] = pd.to_numeric(df_form["CA"].astype(str).str.replace("€", "").str.replace(",", ""), errors="coerce")
-            df_form["Formateur 1"] = df_form["Formateur 1"].astype(str).str.strip().str.title()
+        df_ta["Formateur"] = df_ta["Formateur"].astype(str).str.strip().str.title()
+        df_ta["Nb jours"] = pd.to_numeric(df_ta["Nb jours"], errors="coerce").fillna(0)
+        df_ta["Coût unitaire"] = df_ta["Formateur"].map(get_formateur_cost)
+        df_ta["Coût (TA)"] = df_ta["Nb jours"] * df_ta["Coût unitaire"]
+        df_ta["CA"] = df_ta["Type de TA"].map(ta_budget_data).fillna(0)
 
-            df_ta["Formateur"] = df_ta["Formateur"].astype(str).str.strip().str.title()
-            df_ta["Nb jours"] = pd.to_numeric(df_ta["Nb jours"], errors="coerce").fillna(0)
-            df_ta["Coût unitaire"] = df_ta["Formateur"].map(get_formateur_cost)
-            df_ta["Coût (TA)"] = df_ta["Nb jours"] * df_ta["Coût unitaire"]
-            df_ta["CA (Budget)"] = df_ta["Type de TA"].map(ta_budget_data).fillna(0)
+        # Coût par formateur
+        cout_form = df_form.groupby("Formateur 1")["Cout formateur"].sum()
+        cout_ta = df_ta.groupby("Formateur")["Coût (TA)"].sum()
 
-            # Coût par formateur
-            cout_form = df_form.groupby("Formateur 1")["Cout formateur"].sum()
-            cout_ta = df_ta.groupby("Formateur")["Coût (TA)"].sum()
+        # Index formateurs fusionné
+        all_formateurs = sorted(set(cout_form.index) | set(cout_ta.index))
+        df_renta = pd.DataFrame(index=all_formateurs)
+        df_renta["Formation + Prépa WSA"] = cout_form
+        df_renta["TA"] = cout_ta
+        df_renta["Total (€)"] = df_renta[["Formation + Prépa WSA", "TA"]].sum(axis=1)
 
-            # Index formateurs fusionné
-            all_formateurs = sorted(set(cout_form.index) | set(cout_ta.index))
-            df_renta = pd.DataFrame(index=all_formateurs)
-            df_renta["Formation + Prépa WSA"] = cout_form
-            df_renta["TA"] = cout_ta
-            df_renta["Total (€)"] = df_renta[["Formation + Prépa WSA", "TA"]].sum(axis=1)
+        # Ligne TOTAL
+        total_row = pd.DataFrame(df_renta.sum(numeric_only=True)).T
+        total_row.index = ["TOTAL"]
+        df_renta = pd.concat([df_renta, total_row])
 
-            # Ligne TOTAL
-            total_row = pd.DataFrame(df_renta.sum(numeric_only=True)).T
-            total_row.index = ["TOTAL"]
-            df_renta = pd.concat([df_renta, total_row])
+        # # Format premier tableau
+        # df_renta_display = df_renta.fillna("")
+        # cols_to_format = ["Formation + Prépa WSA", "TA", "Total (€)"]
+        # for col in cols_to_format:
+        #     df_renta_display[col] = df_renta_display[col].apply(lambda x: f"{x:,.0f} €" if isinstance(x, (int, float)) else x)
 
-            # Format premier tableau
-            df_renta_display = df_renta.fillna("")
-            cols_to_format = ["Formation + Prépa WSA", "TA", "Total (€)"]
-            for col in cols_to_format:
-                df_renta_display[col] = df_renta_display[col].apply(lambda x: f"{x:,.0f} €" if isinstance(x, (int, float)) else x)
+        # # Fonction de coloration par colonne (application correcte)
+        # def highlight_columns(df):
+        #     styles = pd.DataFrame("", index=df.index, columns=df.columns)
+        #     styles["Formation + Prépa WSA"] = "background-color: #64B5F6"  # Bleu
+        #     styles["TA"] = "background-color: #FFA726"  # Orange
+        #     styles["Total (€)"] = "background-color: #BDBDBD"  # Gris
+        #     return styles
 
-            # Fonction de coloration par colonne (application correcte)
-            def highlight_columns(df):
-                styles = pd.DataFrame("", index=df.index, columns=df.columns)
-                styles["Formation + Prépa WSA"] = "background-color: #64B5F6"  # Bleu
-                styles["TA"] = "background-color: #FFA726"  # Orange
-                styles["Total (€)"] = "background-color: #BDBDBD"  # Gris
-                return styles
+        # df_renta_display_styled = df_renta_display.style.apply(highlight_columns, axis=None)
 
-            df_renta_display_styled = df_renta_display.style.apply(highlight_columns, axis=None)
+        # st.dataframe(df_renta_display_styled)
 
-            st.dataframe(df_renta_display_styled)
-        with col2: 
-            st.subheader("Détails Rentabilité par BU")
+        # with col2: 
+        st.subheader("Détails Rentabilité par BU")
 
-            # Nettoyage des valeurs monétaires
-            for col in ["CA", "Cout formateur"]:
-                df_form[col] = pd.to_numeric(df_form[col].astype(str).str.replace("\u20ac", "").str.replace(",", ""), errors="coerce")
-            df_ta["Coût (TA)"] = pd.to_numeric(df_ta["Coût (TA)"], errors="coerce")
+        # Nettoyage des valeurs monétaires
+        for col in ["CA", "Cout formateur"]:
+            df_form[col] = pd.to_numeric(df_form[col].astype(str).str.replace("\u20ac", "").str.replace(",", ""), errors="coerce")
+        df_ta["Coût (TA)"] = pd.to_numeric(df_ta["Coût (TA)"], errors="coerce")
 
-            # Regrouper les coûts réels par BU
-            cout_form_bu = (
-                df_form.groupby("BU_clean")["Cout formateur"]
-                .sum()
-                .reset_index()
-                .rename(columns={"Cout formateur": "Coût Form."})
-            )
+        # Regrouper les coûts réels par BU
+        cout_form_bu = (
+            df_form.groupby("BU_clean")["Cout formateur"]
+            .sum()
+            .reset_index()
+            .rename(columns={"Cout formateur": "Coût Formateur"})
+        )
 
-            cout_ta_bu = (
-                df_ta.groupby("BU_clean")["Coût (TA)"]
-                .sum()
-                .reset_index()
-                .rename(columns={"Coût (TA)": "Coût TA"})
-            )
+        cout_ta_bu = (
+            df_ta.groupby("BU_clean")["Coût (TA)"]
+            .sum()
+            .reset_index()
+            .rename(columns={"Coût (TA)": "Coût TA"})
+        )
 
-            # Calcul du CA (budget) par BU
-            ca_form_bu = (
-                df_form.groupby("BU_clean")["CA"]
-                .sum()
-                .reset_index()
-                .rename(columns={"CA": "CA Form. (Budget)"})
-            )
+        # Calcul du CA (budget) par BU
+        ca_form_bu = (
+            df_form.groupby("BU_clean")["CA"]
+            .sum()
+            .reset_index()
+            .rename(columns={"CA": "CA Formateur"})
+        )
 
-            df_ta["CA (Budget)"] = df_ta["Type de TA"].map(ta_budget_data).fillna(0)
-            ca_ta_bu = (
-                df_ta.groupby("BU_clean")["CA (Budget)"]
-                .sum()
-                .reset_index()
-                .rename(columns={"CA (Budget)": "CA TA (Budget)"})
-            )
+        df_ta["CA"] = df_ta["Type de TA"].map(ta_budget_data).fillna(0)
+        ca_ta_bu = (
+            df_ta.groupby("BU_clean")["CA"]
+            .sum()
+            .reset_index()
+            .rename(columns={"CA": "CA TA"})
+        )
 
-            # Fusion des données
-            renta_bu = ca_form_bu.merge(cout_form_bu, on="BU_clean", how="outer")
-            renta_bu = renta_bu.merge(ca_ta_bu, on="BU_clean", how="outer")
-            renta_bu = renta_bu.merge(cout_ta_bu, on="BU_clean", how="outer").fillna(0)
+        # Fusion des données
+        renta_bu = ca_form_bu.merge(cout_form_bu, on="BU_clean", how="outer")
+        renta_bu = renta_bu.merge(ca_ta_bu, on="BU_clean", how="outer")
+        renta_bu = renta_bu.merge(cout_ta_bu, on="BU_clean", how="outer").fillna(0)
 
-            # Calculs de rentabilité
-            renta_bu["Rentabilité Form."] = renta_bu["CA Form. (Budget)"] - renta_bu["Coût Form."]
-            renta_bu["Rentabilité TA"] = renta_bu["CA TA (Budget)"] - renta_bu["Coût TA"]
-            renta_bu["Rentabilité Totale"] = renta_bu["Rentabilité Form."] + renta_bu["Rentabilité TA"]
+        # Calculs de rentabilité
+        renta_bu["Rentabilité Form."] = renta_bu["CA Formateur"] - renta_bu["Coût Formateur"]
+        renta_bu["Rentabilité TA"] = renta_bu["CA TA"] - renta_bu["Coût TA"]
+        renta_bu["Rentabilité Totale"] = renta_bu["Rentabilité Form."] + renta_bu["Rentabilité TA"]
 
-            # Formatage affichage
-            cols_to_format = ["CA Form. (Budget)", "Coût Form.", "Rentabilité Form.", "CA TA (Budget)", "Coût TA", "Rentabilité TA", "Rentabilité Totale"]
-            for col in cols_to_format:
-                renta_bu[col] = renta_bu[col].apply(lambda x: f"{x:,.0f} €")
+        # Formatage affichage
+        cols_to_format = ["CA Formateur", "Coût Formateur", "Rentabilité Form.", "CA TA", "Coût TA", "Rentabilité TA", "Rentabilité Totale"]
+        for col in cols_to_format:
+            renta_bu[col] = renta_bu[col].apply(lambda x: f"{x:,.0f} €")
 
-            st.dataframe(renta_bu)
+        st.dataframe(renta_bu)
         st.subheader("Synthèse Rentabilité Globale")
         def highlight_columns_resume(df):
             styles = pd.DataFrame("", index=df.index, columns=df.columns)
@@ -1078,8 +1221,8 @@ elif selected == "RAPPORT FINANCE":
 
         # Données CA
         ca_form = df_form["CA"].sum()
-        df_ta["CA (Budget)"] = df_ta["Type de TA"].map(ta_budget_data).fillna(0)
-        ca_ta = df_ta["CA (Budget)"].sum()
+        df_ta["CA"] = df_ta["Type de TA"].map(ta_budget_data).fillna(0)
+        ca_ta = df_ta["CA"].sum()
         ca_total = ca_form + ca_ta
 
         # Coûts déjà récupérés depuis df_renta ligne "TOTAL"
@@ -1096,9 +1239,9 @@ elif selected == "RAPPORT FINANCE":
             "Formation + Prépa WSA": [ca_form, cout_form_total, ca_form - cout_form_total, (ca_form - cout_form_total)/ca_form*100 if ca_form else 0],
             "Tournée accompagnée": [ca_ta, cout_ta_total, ca_ta - cout_ta_total, (ca_ta - cout_ta_total)/ca_ta*100 if ca_ta else 0],
             "Total (€)": [ca_total, cout_total, rentabilite, pourcent]
-        }, index=["CA (Budget)", "TOTAL (Réel)", "Rentabilité (€)", "% Rentabilité"])
+        }, index=["CA", "TOTAL (Coût Formateur)", "Rentabilité (€)", "% Rentabilité"])
         # ➕ Réordonner les lignes pour afficher TOTAL en premier
-        df_resume = df_resume.loc[["TOTAL (Réel)", "CA (Budget)", "Rentabilité (€)", "% Rentabilité"]]
+        df_resume = df_resume.loc[["TOTAL (Coût Formateur)", "CA", "Rentabilité (€)", "% Rentabilité"]]
         # Formatage final
         def format_euro_or_percent(val, row_name):
             if isinstance(val, (int, float)):
@@ -1230,7 +1373,7 @@ elif selected == "RAPPORT FINANCE":
         # df_ta["Coût unitaire"] = df_ta["Formateur"].map(get_formateur_cost)
         # df_ta["Nb jours"] = pd.to_numeric(df_ta["Nb jours"], errors="coerce").fillna(0)
         # df_ta["Coût formateur"] = df_ta["Nb jours"] * df_ta["Coût unitaire"]
-        # df_ta["CA (Budget)"] = df_ta["Type de TA"].map(ta_budget_data).fillna(0)
+        # df_ta["CA"] = df_ta["Type de TA"].map(ta_budget_data).fillna(0)
 
         # # Agrégation par formateur
         # df_formateurs_form = df_form.groupby("Formateur 1").agg({
@@ -1243,10 +1386,10 @@ elif selected == "RAPPORT FINANCE":
         # })
 
         # df_formateurs_ta = df_ta.groupby("Formateur").agg({
-        #     "CA (Budget)": "sum",
+        #     "CA": "sum",
         #     "Coût formateur": "sum"
         # }).reset_index().rename(columns={
-        #     "CA (Budget)": "CA TA",
+        #     "CA": "CA TA",
         #     "Coût formateur": "Coût TA"
         # })
 
@@ -1299,7 +1442,7 @@ elif selected =="RAPPORT CLIENT":
         if pd.isnull(x):
             return ""
         return f"{x:,.2f}".replace(",", " ").replace(".", ",") + " €"
-    
+
     if "result_df" in st.session_state:
         df_form = st.session_state["result_df"].copy()
     else:
@@ -1307,6 +1450,54 @@ elif selected =="RAPPORT CLIENT":
         st.stop()
 
     df_ta = pd.read_excel(st.session_state["calendar_file"], sheet_name="TA 2025")
+
+    # ===== Participants (pour Nb Participants corrigé) =====
+    df_participants = None
+    try:
+        df_participants = pd.read_excel(
+            st.session_state["calendar_file"],
+            sheet_name="BDD Participants 2025",
+            header=2
+        )
+    except Exception:
+        df_participants = None
+
+    def normalize_bu(bu):
+        if isinstance(bu, str):
+            return bu.strip().upper().replace("É", "E")
+        return bu
+
+    bu_mapping = {
+        "ALLEMAGNE": "ALLEMAGNE",
+        "APAC - CHINE": "APAC CHINE",
+        "ESPAGNE": "ESPAGNE",
+        "EUROPE DU NORD": "EUROPE DU NORD",
+        "FRANCE": "FRANCE",
+        "FRANCE_TÉLÉVENTE": "FRANCE",
+        "FRANCE WEISS": "FRANCE",
+        "FRANCE  KAM GAM": "FRANCE",
+        "FRANCE KAM GAM": "FRANCE",
+        "ITALIE": "ITALIE",
+        "JAPON": "JAPON",
+        "RETAIL INTERNATIONAL": "RETAIL",
+        "CORPORATE GIFTING": "RETAIL",
+        "MAISONS": "ALL",
+        "USA - CANADA": "USA CANADA"
+    }
+    bu_mapping_norm = {normalize_bu(k): normalize_bu(v) for k, v in bu_mapping.items()}
+
+    def get_participants_par_bu(df_participants: pd.DataFrame) -> pd.DataFrame:
+        dfp = df_participants.copy()
+        dfp["BU_clean"] = dfp["Groupes"].apply(normalize_bu).replace(bu_mapping_norm)
+        dfp["Nom"] = dfp["Nom"].astype(str).str.strip().str.upper()
+        dfp["Prénom"] = dfp["Prénom"].astype(str).str.strip().str.upper()
+
+        # Unicité : BU + Nom + Prénom
+        dfp_unique = dfp.drop_duplicates(subset=["BU_clean", "Nom", "Prénom"])
+
+        out = dfp_unique["BU_clean"].value_counts().reset_index()
+        out.columns = ["BU_clean", "Nb Participants"]
+        return out
 
     df_form["BU"] = df_form["BU"].astype(str).str.strip()
     df_form["Population"] = df_form["Population"].astype(str).str.lower().str.strip()
@@ -1355,10 +1546,10 @@ elif selected =="RAPPORT CLIENT":
         "CA réalisé": "Coût (Réel)"
     })
 
-    ta_count["CA (Budget)"] = ta_count["Type de TA"].map(ta_budget_data).fillna(0) * ta_count["Nb TA"]
+    ta_count["CA"] = ta_count["Type de TA"].map(ta_budget_data).fillna(0) * ta_count["Nb TA"]
 
     ta_pivot = ta_count.pivot(index="BU", columns="Type de TA", values="Nb TA").fillna(0)
-    ta_budget = ta_count.groupby("BU")[["CA (Budget)", "Coût (Réel)"]].sum().reset_index()
+    ta_budget = ta_count.groupby("BU")[["CA", "Coût (Réel)"]].sum().reset_index()
 
     merged = form_count.groupby("BU").agg({
         "Nb Formations": "sum",
@@ -1370,14 +1561,14 @@ elif selected =="RAPPORT CLIENT":
     merged = merged.merge(ta_budget, on="BU", how="left").fillna(0)
     merged = merged.merge(ta_pivot, on="BU", how="left").fillna(0)
 
-    merged["Budget Total"] = merged["Budget (Formation)"] + merged["CA (Budget)"]
+    merged["Budget Total"] = merged["Budget (Formation)"] + merged["CA"]
     merged["Réel Total"] = merged["Réel (Formation)"] + merged["Coût (Réel)"]
 
     # st.subheader("🧾 Vue consolidée par BU")
     # st.dataframe(merged.style.format({
     #     "Budget (Formation)": "{:,.2f} €",
     #     "Réel (Formation)": "{:,.2f} €",
-    #     "CA (Budget)": "{:,.2f} €",
+    #     "CA": "{:,.2f} €",
     #     "Coût (Réel)": "{:,.2f} €",
     #     "Budget Total": "{:,.2f} €",
     #     "Réel Total": "{:,.2f} €"
@@ -1423,7 +1614,19 @@ elif selected =="RAPPORT CLIENT":
         df_form["Maintenue / Annulée"] = df_form["Maintenue / Annulée"].astype(str).str.strip().str.capitalize()
 
             # Widgets de filtre de date
-        start_date, end_date = st.date_input("📅 Filtrer par Date de début", [min_date, max_date], key="date_range_bu")
+        date_range = st.date_input(
+            "📅 Filtrer par Date de début et fin",
+            value=[min_date, max_date],
+            key="date_range_bu"
+        )
+
+        # 🛡️ Sécurité : l'utilisateur doit choisir une période complète
+        if not isinstance(date_range, (list, tuple)) or len(date_range) != 2:
+            st.sidebar.info("ℹ️ Merci de sélectionner une **date de fin** pour appliquer le filtre.")
+            st.stop()
+
+        start_date, end_date = date_range
+
 
         # Déclaration du filtre BU
         bu_form_list = sorted(df_form["BU"].dropna().unique())
@@ -1518,7 +1721,7 @@ elif selected =="RAPPORT CLIENT":
         # Budget par BU (sans filtre de date, avec filtre BU)
         df_budget_bu = df_form_budget.groupby("BU").agg({
             "CA": "sum"
-        }).reset_index().rename(columns={"CA": "CA (Budget)"})
+        }).reset_index().rename(columns={"CA": "CA"})
 
         # Indicateurs filtrés (avec filtre de date)
         df_indics_bu = df_form.groupby("BU").agg({
@@ -1570,7 +1773,7 @@ elif selected =="RAPPORT CLIENT":
             st.markdown(f"""
             <div class="card">
                 <h2>{format_montant(total_ca)}</h2>
-                <p>Total CA (Budget)</p>
+                <p>Total CA</p>
                 <div class="delta positive">100%</div>
             </div>
             """, unsafe_allow_html=True)
@@ -1597,69 +1800,45 @@ elif selected =="RAPPORT CLIENT":
             st.markdown(f"""
             <div class="card">
             <h2>{nb_formations_filtrées} / {nb_formations_global}</h2>
-            <p>Nb de Formations</p>
+            <p>Nb de Formations (Réalisées / Totales)</p>
             <div class="delta positive">{pourcentage_formations:.0f}%</div>
 
             </div>
             """, unsafe_allow_html=True)
-        # with col5:
-        #     # 🎯 Filtre optionnel par population pour analyse
-        #     populations = df_form["Population"].dropna().unique()
-        #     selected_population = st.selectbox("Filtrer par population", options=["Toute population"] + list(populations))
 
-        #     # ➕ Appliquer le filtre sur la population
-        #     if selected_population != "Toute population":
-        #         df_filtered = df_form[df_form["Population"] == selected_population]
-        #     else:
-        #         df_filtered = df_form
+        # ===== Ventilation Formations par BU (Nb Participants corrigé via df_participants) =====
 
-        #     # ➕ Recalcul du coût moyen par participant
-        #     nb_part = pd.to_numeric(df_filtered["Nb participant"], errors='coerce').sum()
-        #     cout_total = pd.to_numeric(
-        #         df_filtered["Cout formateur"]
-        #         .astype(str)
-        #         .str.replace("€", "")
-        #         .str.replace(",", ""),
-        #         errors="coerce"
-        #     ).sum()
-        #     cout_moyen_filtered = cout_total / nb_part if nb_part != 0 else 0
-        #     st.markdown(f"""
-        #     <div class="card">
-        #         <h2>{format_montant(cout_moyen_filtered)} €</h2>
-        #         <p>Coût moyen / participant</p>
-        #     </div>
-        #     """, unsafe_allow_html=True)
+        # 1) Budget par BU (filtré BU uniquement, pas de date)
+        df_budget_bu = df_form_budget.groupby("BU").agg({"CA": "sum"}).reset_index().rename(columns={"CA": "CA"})
 
-
-        # # ➕ Affichage dans une nouvelle carte KPI
-        # col5, _ = st.columns([1, 3])
-        # with col5:
-        #     st.markdown(f"""
-        #     <div class="card">
-        #         <h2>{cout_moyen_filtered:,.2f} €</h2>
-        #         <p>Coût moyen / participant</p>
-        #     </div>
-        #     """, unsafe_allow_html=True)
-
-
-
-        # ➤ Indicateurs par BU (date + BU filtré)
-        df_indics_bu = df_form.groupby("BU").agg({
-            "Module": "count",
-            "Nb participant": lambda x: pd.to_numeric(x, errors="coerce").sum()
-        }).reset_index().rename(columns={"Module": "Nb Formations", "Nb participant": "Nb Participants"})
-
-        # ➤ Budget par BU (filtré BU uniquement, pas de date)
-        df_budget_bu = df_form_budget.groupby("BU").agg({"CA": "sum"}).reset_index().rename(columns={"CA": "CA (Budget)"})
-
-        # ➤ CA Réalisé par BU (avec date + BU + Réalisées)
+        # 2) CA Réalisé par BU (avec date + BU + Réalisées)
         df_realise_bu = df_realisees.groupby("BU").agg({"CA": "sum"}).reset_index().rename(columns={"CA": "CA Réalisé"})
 
-        # ➤ Fusion des 3
+        # 3) Nb Formations (depuis df_form filtré date+BU)
+        df_indics_bu = df_form.groupby("BU").agg({
+            "Module": "count"
+        }).reset_index().rename(columns={"Module": "Nb Formations"})
+
+        # 4) Nb Participants corrigé depuis la feuille Participants (sur la même BU filtrée)
+        if df_participants is not None:
+            participants_par_bu = get_participants_par_bu(df_participants)  # BU_clean | Nb Participants
+
+            # on aligne les BU du tableau avec BU_clean
+            df_indics_bu["BU_clean"] = df_indics_bu["BU"].apply(normalize_bu).replace(bu_mapping_norm)
+
+            df_indics_bu = df_indics_bu.merge(participants_par_bu, on="BU_clean", how="left")
+            df_indics_bu["Nb Participants"] = df_indics_bu["Nb Participants"].fillna(0).astype(int)
+
+            df_indics_bu = df_indics_bu.drop(columns=["BU_clean"])
+        else:
+            df_indics_bu["Nb Participants"] = 0
+
+        # 5) Fusion finale
         ventilation_form = df_indics_bu \
             .merge(df_budget_bu, on="BU", how="left") \
             .merge(df_realise_bu, on="BU", how="left") \
             .fillna(0)
+
 
         st.subheader("Ventilation Formations par BU")
         # ➕ Ligne de total
@@ -1667,16 +1846,16 @@ elif selected =="RAPPORT CLIENT":
             "BU": ["Total"],
             "Nb Formations": [ventilation_form["Nb Formations"].sum()],
             "Nb Participants": [ventilation_form["Nb Participants"].sum()],
-            "CA (Budget)": [ventilation_form["CA (Budget)"].sum()],
+            "CA": [ventilation_form["CA"].sum()],
             "CA Réalisé": [ventilation_form["CA Réalisé"].sum()]
         })
 
         ventilation_form = pd.concat([ventilation_form, total_form], ignore_index=True)
         # ➕ Calculs des colonnes supplémentaires
-        ventilation_form["Maintenu (à réaliser)"] = ventilation_form["CA (Budget)"] - ventilation_form["CA Réalisé"]
+        ventilation_form["Maintenu (à réaliser)"] = ventilation_form["CA"] - ventilation_form["CA Réalisé"]
 
         ventilation_form["% Ecart"] = ventilation_form.apply(
-            lambda row: (row["Maintenu (à réaliser)"] / row["CA (Budget)"]) * 100 if row["CA (Budget)"] != 0 else 0,
+            lambda row: (row["Maintenu (à réaliser)"] / row["CA"]) * 100 if row["CA"] != 0 else 0,
             axis=1
         )
         ventilation_form["Coût moyen par participant"] = ventilation_form.apply(
@@ -1685,7 +1864,7 @@ elif selected =="RAPPORT CLIENT":
         )
 
         styled_ventilation_form = ventilation_form.style.format({
-            "CA (Budget)": "{:,.2f} €",
+            "CA": "{:,.2f} €",
             "CA Réalisé": "{:,.2f} €",
             "Maintenu (à réaliser)": "{:,.2f} €",
             "% Ecart": "{:.0f} %",
@@ -1697,7 +1876,7 @@ elif selected =="RAPPORT CLIENT":
         st.dataframe(styled_ventilation_form)
 
         # Préparation des colonnes
-        ventilation_form["Solde Restant"] = ventilation_form["CA (Budget)"] - ventilation_form["CA Réalisé"]
+        ventilation_form["Solde Restant"] = ventilation_form["CA"] - ventilation_form["CA Réalisé"]
         # ➕ Tableau des formations réalisées
         st.subheader("📋 Détail des Formations Réalisées")
 
@@ -1727,10 +1906,10 @@ elif selected =="RAPPORT CLIENT":
 
 
         # Créer un DataFrame "long" pour barres groupées
-        df_bar = ventilation_form[ventilation_form["BU"] != "Total"][["BU", "CA (Budget)", "CA Réalisé", "Solde Restant"]]
+        df_bar = ventilation_form[ventilation_form["BU"] != "Total"][["BU", "CA", "CA Réalisé", "Solde Restant"]]
         df_bar_long = df_bar.melt(id_vars="BU", var_name="Type", value_name="Montant (€)")
 
-        st.subheader("Comparatif CA Budget / CA réalisé / Maintenu à réaliser par BU")
+        st.subheader("Comparatif CA / CA réalisé / Maintenu à réaliser par BU")
         fig = px.bar(
             df_bar_long,
             x="BU",
@@ -1739,7 +1918,7 @@ elif selected =="RAPPORT CLIENT":
             barmode="group",
             text_auto=".2s",
             color_discrete_map={
-                "CA (Budget)": "#0033A0",       # Bleu
+                "CA": "#0033A0",       # Bleu
                 "CA Réalisé": "#66B2FF",       # Rouge clair
                 "Solde Restant": "#66BB66"       # Vert
             }
@@ -1758,10 +1937,10 @@ elif selected =="RAPPORT CLIENT":
         df_monthly_realise = df_monthly_form[df_monthly_form["Maintenue / Annulée"].str.lower().str.strip() == "réalisée"]
 
         # ➕ Groupe 1 : Budget cumulé (toutes les formations visibles)
-        df_budget_group = df_monthly_form.groupby("Mois")[["CA"]].sum().cumsum().rename(columns={"CA": "Budget Cumulé"})
+        df_budget_group = df_monthly_form.groupby("Mois")[["CA"]].sum().cumsum().rename(columns={"CA": "CA Cumulé"})
 
         # ➕ Groupe 2 : Réel cumulé (seulement "réalisées")
-        df_real_group = df_monthly_realise.groupby("Mois")[["CA"]].sum().cumsum().rename(columns={"CA": "Réel Cumulé"})
+        df_real_group = df_monthly_realise.groupby("Mois")[["CA"]].sum().cumsum().rename(columns={"CA": "CA réalisé Cumulé"})
 
         # ➕ Fusion des deux courbes
         df_grouped_form = pd.concat([df_budget_group, df_real_group], axis=1).fillna(method="ffill").fillna(0).reset_index()
@@ -1770,7 +1949,7 @@ elif selected =="RAPPORT CLIENT":
         df_form_long = df_grouped_form.melt(id_vars="Mois", var_name="Type", value_name="Montant (€)")
 
         # 📈 Plotly Line Chart
-        st.subheader("📈 Évolution CA Budget vs CA réalisé (Formations)")
+        st.subheader("📈 Évolution CA vs CA réalisé (Formations)")
         fig_form = px.line(
             df_form_long,
             x="Mois",
@@ -1779,8 +1958,8 @@ elif selected =="RAPPORT CLIENT":
             markers=True,
             text="Montant (€)",
             color_discrete_map={
-                "Budget Cumulé": "#0033A0",
-                "Réel Cumulé": "#66B2FF"
+                "CA Cumulé": "#0033A0",
+                "CA réalisé Cumulé": "#66B2FF"
             }
         )
         fig_form.update_traces(texttemplate="%{text:,.0f} €", textposition="top right")
@@ -1803,7 +1982,19 @@ elif selected =="RAPPORT CLIENT":
         # 1. Sauvegarder la version non filtrée pour KPI global
         df_ta_original = df_ta.copy()
         # Widgets de filtre de date
-        start_date, end_date = st.date_input("📅 Filtrer par Date de début", [min_date, max_date], key="date_range_bu_ta")
+        date_range = st.date_input(
+            "📅 Filtrer par Date de début et fin",
+            value=[min_date, max_date],
+            key="date_range_bu_ta"
+        )
+
+        # 🛡️ Sécurité : l'utilisateur doit choisir une période complète
+        if not isinstance(date_range, (list, tuple)) or len(date_range) != 2:
+            st.sidebar.info("ℹ️ Merci de sélectionner une **date de fin** pour appliquer le filtre.")
+            st.stop()
+
+        start_date, end_date = date_range
+
         # 2. Appliquer filtre BU sur TA
         bu_ta_list = sorted(df_ta["BU"].dropna().unique())
         selected_bu_ta = st.multiselect("Filtrer les TA par BU", options=bu_ta_list, default=bu_ta_list, key="ta_bu_filter")
@@ -1854,10 +2045,10 @@ elif selected =="RAPPORT CLIENT":
             "CA réalisé": "CA (Réalisé)"
         })
 
-        ta_count_filtered["CA (Budget)"] = ta_count_filtered["Type de TA"].map(ta_budget_data).fillna(0) * ta_count_filtered["Nb TA"]
+        ta_count_filtered["CA"] = ta_count_filtered["Type de TA"].map(ta_budget_data).fillna(0) * ta_count_filtered["Nb TA"]
 
         # Ventilation par BU
-        ventilation_ta = ta_count_filtered.groupby("BU")[["CA (Budget)", "CA (Réalisé)"]].sum().reset_index()
+        ventilation_ta = ta_count_filtered.groupby("BU")[["CA", "CA (Réalisé)"]].sum().reset_index()
 
         # TA par type
         obs_ta = ta_count_filtered[ta_count_filtered["Type de TA"] == "observation"].set_index("BU")["Nb TA"]
@@ -1868,7 +2059,7 @@ elif selected =="RAPPORT CLIENT":
         ventilation_ta["Nb TA Suivi"] = ventilation_ta["BU"].map(suivi_ta).fillna(0).astype(int)
 
         # Réorganiser
-        ventilation_ta = ventilation_ta[["BU", "Nb TA Observation", "Nb TA Suivi", "CA (Budget)", "CA (Réalisé)"]]
+        ventilation_ta = ventilation_ta[["BU", "Nb TA Observation", "Nb TA Suivi", "CA", "CA (Réalisé)"]]
 
         st.subheader("Indicateurs Clés")
 
@@ -1876,7 +2067,7 @@ elif selected =="RAPPORT CLIENT":
         df_kpi_ta = ventilation_ta[ventilation_ta["BU"] != "Total"]
 
         # Calculs principaux
-        total_ca_ta = df_kpi_ta["CA (Budget)"].sum()
+        total_ca_ta = df_kpi_ta["CA"].sum()
         total_ca_reel_ta = df_kpi_ta["CA (Réalisé)"].sum()
         total_ta_obs = df_kpi_ta["Nb TA Observation"].sum()
         total_ta_suivi = df_kpi_ta["Nb TA Suivi"].sum()
@@ -1897,7 +2088,7 @@ elif selected =="RAPPORT CLIENT":
             st.markdown(f"""
             <div class="card">
                 <h2>{format_montant(total_ca_budget_global)} €</h2>
-                <p>Total CA (Budget)</p>
+                <p>Total CA</p>
                 <div class="delta positive">100%</div>
             </div>
             """, unsafe_allow_html=True)
@@ -2076,18 +2267,18 @@ elif selected =="RAPPORT CLIENT":
             "BU": ["Total"],
             "Nb TA Observation": [ventilation_ta["Nb TA Observation"].sum()],
             "Nb TA Suivi": [ventilation_ta["Nb TA Suivi"].sum()],
-            "CA (Budget)": [ventilation_ta["CA (Budget)"].sum()],
+            "CA": [ventilation_ta["CA"].sum()],
             "CA (Réalisé)": [ventilation_ta["CA (Réalisé)"].sum()]
         })
 
         ventilation_ta = pd.concat([ventilation_ta, total_ta], ignore_index=True)
 
         # Ajouter colonne Maintenu (à réaliser) = Budget - Réel
-        ventilation_ta["Maintenu (à réaliser)"] = ventilation_ta["CA (Budget)"] - ventilation_ta["CA (Réalisé)"]
+        ventilation_ta["Maintenu (à réaliser)"] = ventilation_ta["CA"] - ventilation_ta["CA (Réalisé)"]
 
         # Ajouter % Écart = Maintenu / Budget
         ventilation_ta["% Ecart"] = ventilation_ta.apply(
-            lambda row: (row["Maintenu (à réaliser)"] / row["CA (Budget)"]) * 100 if row["CA (Budget)"] != 0 else 0,
+            lambda row: (row["Maintenu (à réaliser)"] / row["CA"]) * 100 if row["CA"] != 0 else 0,
             axis=1
         )
 
@@ -2096,7 +2287,7 @@ elif selected =="RAPPORT CLIENT":
             .apply(blue_row_style, axis=1) \
             .applymap(highlight_zeros, subset=["CA (Réalisé)", "Maintenu (à réaliser)", "% Ecart"]) \
             .format({
-                "CA (Budget)": "{:,.2f} €",
+                "CA": "{:,.2f} €",
                 "CA (Réalisé)": "{:,.2f} €",
                 "Nb TA Observation": "{:.0f}",
                 "Nb TA Suivi": "{:.0f}",
@@ -2108,13 +2299,13 @@ elif selected =="RAPPORT CLIENT":
 
         
         # ➕ Préparer les colonnes
-        ventilation_ta["Solde Restant"] = ventilation_ta["CA (Budget)"] - ventilation_ta["CA (Réalisé)"]
+        ventilation_ta["Solde Restant"] = ventilation_ta["CA"] - ventilation_ta["CA (Réalisé)"]
 
         # 📋 Détail des TA réalisées (jusqu'à aujourd’hui)
         df_ta_realisees = df_ta_valid[df_ta_valid["Date nettoyée"] <= pd.to_datetime("today")].copy()
         df_ta_realisees = df_ta_realisees.rename(columns={"Date nettoyée": "Date"})
 
-        # Calcul du CA (Budget) pour chaque ligne
+        # Calcul du CA pour chaque ligne
         df_ta_realisees["CA (Budget Réalisé)"] = df_ta_realisees["Type de TA"].map(ta_budget_data).fillna(0)
 
         # Colonnes à afficher
@@ -2135,10 +2326,10 @@ elif selected =="RAPPORT CLIENT":
 
 
         # ➕ Graphique : Barres groupées pour Budget, Réel et Solde
-        df_bar_ta = ventilation_ta[ventilation_ta["BU"] != "Total"][["BU", "CA (Budget)", "CA (Réalisé)", "Solde Restant"]]
+        df_bar_ta = ventilation_ta[ventilation_ta["BU"] != "Total"][["BU", "CA", "CA (Réalisé)", "Solde Restant"]]
         df_bar_ta_long = df_bar_ta.melt(id_vars="BU", var_name="Type", value_name="Montant (€)")
 
-        st.subheader("Comparatif CA Budget / CA réalisé / Maintenu à réaliser par BU (TA)")
+        st.subheader("Comparatif CA / CA réalisé / Maintenu à réaliser par BU (TA)")
         fig_ta = px.bar(
             df_bar_ta_long,
             x="BU",
@@ -2147,7 +2338,7 @@ elif selected =="RAPPORT CLIENT":
             barmode="group",
             text_auto=".2s",
             color_discrete_map={
-                "CA (Budget)": "#0033A0",       # Bleu
+                "CA": "#0033A0",       # Bleu
                 "CA (Réalisé)": "#66B2FF",       # Rouge clair
                 "Solde Restant": "#66BB66"     # Vert
             }
@@ -2159,7 +2350,7 @@ elif selected =="RAPPORT CLIENT":
         # Budget : toutes les TA (df_ta)
         df_budget_monthly = df_ta.copy()
         df_budget_monthly["Mois"] = df_budget_monthly["Date de début"].dt.to_period("M").dt.to_timestamp()
-        df_budget_monthly["CA (Budget)"] = df_budget_monthly["Type de TA"].map(ta_budget_data).fillna(0)
+        df_budget_monthly["CA"] = df_budget_monthly["Type de TA"].map(ta_budget_data).fillna(0)
 
         # Réel : uniquement les lignes valides (df_ta_valid)
         df_reel_monthly = df_ta_valid.copy()
@@ -2168,12 +2359,12 @@ elif selected =="RAPPORT CLIENT":
         df_reel_monthly["CA (Réalisé)"] = df_reel_monthly["Budget Unitaire"]  # ✅ c’est le budget réel jusqu’à date
 
         # Cumul Budget
-        df_budget_grouped = df_budget_monthly.groupby("Mois")["CA (Budget)"].sum().sort_index().cumsum().reset_index()
-        df_budget_grouped = df_budget_grouped.rename(columns={"CA (Budget)": "Budget Cumulé"})
+        df_budget_grouped = df_budget_monthly.groupby("Mois")["CA"].sum().sort_index().cumsum().reset_index()
+        df_budget_grouped = df_budget_grouped.rename(columns={"CA": "CA Cumulé"})
 
         # Cumul Réel (basé sur budget unitaire des TA réalisées)
         df_reel_grouped = df_reel_monthly.groupby("Mois")["CA (Réalisé)"].sum().sort_index().cumsum().reset_index()
-        df_reel_grouped = df_reel_grouped.rename(columns={"CA (Réalisé)": "Réel Cumulé"})
+        df_reel_grouped = df_reel_grouped.rename(columns={"CA (Réalisé)": "CA réalisé Cumulé"})
 
         # Fusion
         df_grouped_ta = pd.merge(df_budget_grouped, df_reel_grouped, on="Mois", how="outer").fillna(method="ffill").fillna(0)
@@ -2182,7 +2373,7 @@ elif selected =="RAPPORT CLIENT":
         df_ta_long = df_grouped_ta.melt(id_vars="Mois", var_name="Type", value_name="Montant (€)")
 
         # Affichage
-        st.subheader("📈 Évolution CA Budget vs CA réalisé cumulé (TA)")
+        st.subheader("📈 Évolution CA vs CA réalisé cumulé (TA)")
         fig_ta = px.line(
             df_ta_long,
             x="Mois",
@@ -2191,8 +2382,8 @@ elif selected =="RAPPORT CLIENT":
             markers=True,
             text="Montant (€)",
             color_discrete_map={
-                "Budget Cumulé": "#0033A0",
-                "Réel Cumulé": "#66B2FF"
+                "CA Cumulé": "#0033A0",
+                "CA réalisé Cumulé": "#66B2FF"
             }
         )
         fig_ta.update_traces(texttemplate="%{text:,.0f} €", textposition="top right")
@@ -2287,7 +2478,7 @@ elif selected =="RAPPORT CLIENT":
     #         st.markdown(f"""
     #         <div class="card">
     #             <h2>{total_ca_budget:,.2f} €</h2>
-    #             <p>Total CA (Budget)</p>
+    #             <p>Total CA</p>
     #             <div class="delta positive">100%</div>
     #         </div>
     #         """, unsafe_allow_html=True)
@@ -2443,12 +2634,12 @@ elif selected =="RAPPORT CLIENT":
         # Ajouter colonne BU_clean
         df_ta["BU_clean"] = df_ta["BU"].str.upper().str.strip()
 
-        # Calcul du CA (Budget) TA si pas déjà présent
-        df_ta["CA (Budget)"] = df_ta["Type de TA"].map(ta_budget_data).fillna(0)
+        # Calcul du CA TA si pas déjà présent
+        df_ta["CA"] = df_ta["Type de TA"].map(ta_budget_data).fillna(0)
 
         # Groupement propre avec nom de BU nettoyé
         ta_budget = (
-            df_ta.groupby("BU_clean")["CA (Budget)"]
+            df_ta.groupby("BU_clean")["CA"]
             .sum()
             .to_dict()
         )
@@ -2577,6 +2768,7 @@ elif selected =="RAPPORT CLIENT":
                 "FRANCE_TÉLÉVENTE": "FRANCE",
                 "FRANCE WEISS": "FRANCE",
                 "FRANCE  KAM GAM": "FRANCE",
+                "FRANCE KAM GAM": "FRANCE",
                 "ITALIE": "ITALIE",
                 "JAPON": "JAPON",
                 "RETAIL INTERNATIONAL": "RETAIL",
@@ -2584,6 +2776,7 @@ elif selected =="RAPPORT CLIENT":
                 "MAISONS": "ALL",
                 "USA - CANADA": "USA CANADA"
             }
+            bu_mapping_norm = {normalize_bu(k): normalize_bu(v) for k, v in bu_mapping.items()}
 
             # Appliquer la normalisation
             df_form["BU_clean"] = df_form["BU"].apply(normalize_bu)
@@ -2596,7 +2789,7 @@ elif selected =="RAPPORT CLIENT":
             # st.write("Colonnes disponibles dans df_participants :", df_participants.columns.tolist())
 
             df_participants["BU_clean"] = df_participants["Groupes"].apply(normalize_bu)
-            df_participants["BU_clean"] = df_participants["BU_clean"].replace(bu_mapping)
+            df_participants["BU_clean"] = df_participants["BU_clean"].replace(bu_mapping_norm)
 
             # Nettoyage des champs pour éviter les doublons liés aux espaces/majuscules
             df_participants["Nom"] = df_participants["Nom"].str.strip().str.upper()
