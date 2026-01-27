@@ -1629,8 +1629,23 @@ elif selected =="RAPPORT CLIENT":
 
 
         # Déclaration du filtre BU
-        bu_form_list = sorted(df_form["BU"].dropna().unique())
-        selected_bu_form = st.multiselect("Filtrer les Formations par BU", options=bu_form_list, default=bu_form_list, key="form_bu_filter")
+        # ✅ 1) Filtrer d'abord par date (sur une base intacte)
+        df_form_date = df_form_original[
+            (df_form_original["Date de début"] >= pd.Timestamp(start_date)) &
+            (df_form_original["Date de début"] <= pd.Timestamp(end_date))
+        ].copy()
+
+        # ✅ 2) Liste BU uniquement dans la période
+        bu_form_list = sorted(df_form_date["BU"].dropna().unique())
+
+        # ✅ 3) Multiselect BU (par défaut : toutes les BU de la période)
+        selected_bu_form = st.multiselect(
+            "Filtrer les Formations par BU",
+            options=bu_form_list,
+            default=bu_form_list,
+            key=f"form_bu_filter_{start_date}_{end_date}"
+        )
+
         # 🔹 Filtre sur "Maintenue / Annulée"
         maintenue_list = df_form["Maintenue / Annulée"].dropna().unique().tolist()
         maintenue_list = sorted(maintenue_list, key=lambda x: x.lower().strip())  # Tri propre
@@ -1647,13 +1662,9 @@ elif selected =="RAPPORT CLIENT":
         # Calcul AVANT de filtrer
         nb_formations_global = df_form_original["Module"].count()
 
-        # ➤ Maintenant filtre
-        df_form = df_form[df_form["BU"].isin(selected_bu_form)]
-        # Appliquer le filtre de dates
-        df_form = df_form[
-            (df_form["Date de début"] >= pd.Timestamp(start_date)) &
-            (df_form["Date de début"] <= pd.Timestamp(end_date))
-        ]
+        # ✅ Appliquer BU sur les données déjà filtrées date
+        df_form = df_form_date[df_form_date["BU"].isin(selected_bu_form)].copy()
+
 
         # ✅ CA Réalisé = seulement "Réalisée" parmi les données filtrées par date
         df_realisees = df_form[df_form["Maintenue / Annulée"].str.lower().str.strip() == "réalisée"].copy()
@@ -1782,7 +1793,7 @@ elif selected =="RAPPORT CLIENT":
             pourcentage_realise = (total_ca_realise / total_ca) * 100 if total_ca != 0 else 0
             st.markdown(f"""
             <div class="card">
-                <h2>{format_montant(total_ca_realise)} €</h2>
+                <h2>{format_montant(total_ca_realise)}</h2>
                 <p>Total CA Réalisé</p>
                 <div class="delta {get_delta_class(pourcentage_realise)}">{pourcentage_realise:.0f}%</div>
             </div>
@@ -1790,7 +1801,7 @@ elif selected =="RAPPORT CLIENT":
         with col3:
             st.markdown(f"""
             <div class="card">
-                <h2>{format_montant(solde_restant)} €</h2>
+                <h2>{format_montant(solde_restant)}</h2>
                 <p>Solde Restant</p>
                 <div class="delta {get_delta_class(percentage_budget_remaining)}">{percentage_budget_remaining:.0f}%</div>
             </div>
@@ -1995,23 +2006,43 @@ elif selected =="RAPPORT CLIENT":
 
         start_date, end_date = date_range
 
-        # 2. Appliquer filtre BU sur TA
-        bu_ta_list = sorted(df_ta["BU"].dropna().unique())
-        selected_bu_ta = st.multiselect("Filtrer les TA par BU", options=bu_ta_list, default=bu_ta_list, key="ta_bu_filter")
+        # ✅ 1) Filtrer d'abord par date (base intacte)
+        df_ta_original["Date de début"] = df_ta_original["Date de début"].apply(convert_trimestre_to_date)
+
+        df_ta_date = df_ta_original[
+            (df_ta_original["Date de début"] >= pd.Timestamp(start_date)) &
+            (df_ta_original["Date de début"] <= pd.Timestamp(end_date))
+        ].copy()
+
+        # ✅ 2) Liste BU uniquement dans la période
+        bu_ta_list = sorted(df_ta_date["BU"].dropna().unique())
+
+        # ✅ 3) Multiselect BU (par défaut : toutes les BU de la période)
+        selected_bu_ta = st.multiselect(
+            "Filtrer les TA par BU",
+            options=bu_ta_list,
+            default=bu_ta_list,
+            key=f"ta_bu_filter_{start_date}_{end_date}"
+        )
+
         # ➕ Calculer le budget total sans appliquer le filtre de date
-        df_ta_bu_only = df_ta_original[df_ta_original["BU"].isin(selected_bu_ta)]
+        df_ta_bu_only = df_ta_date[df_ta_date["BU"].isin(selected_bu_ta)]
+
         df_ta_bu_only["Budget Unitaire"] = df_ta_bu_only["Type de TA"].map(ta_budget_data).fillna(0)
         total_ca_budget_global = df_ta_bu_only["Budget Unitaire"].sum()
 
-        # 👉 APPLIQUE les filtres AVANT de faire ta_count
-        df_ta["Date de début"] = df_ta["Date de début"].apply(convert_trimestre_to_date)
+        # # 👉 APPLIQUE les filtres AVANT de faire ta_count
+        # df_ta["Date de début"] = df_ta["Date de début"].apply(convert_trimestre_to_date)
         st.sidebar.write(f"Date d'Aujourd'hui : **{aujourd_hui.date().strftime('%d/%m/%Y')}**")
-        # 1. Filtrer d'abord
-        df_ta = df_ta[
-            (df_ta["BU"].isin(selected_bu_ta)) &
-            (df_ta["Date de début"] >= pd.Timestamp(start_date)) &
-            (df_ta["Date de début"] <= pd.Timestamp(end_date))
-        ]
+        # # 1. Filtrer d'abord
+        # df_ta = df_ta[
+        #     (df_ta["BU"].isin(selected_bu_ta)) &
+        #     (df_ta["Date de début"] >= pd.Timestamp(start_date)) &
+        #     (df_ta["Date de début"] <= pd.Timestamp(end_date))
+        # ]
+        # ✅ df_ta = TA filtrés date + BU
+        df_ta = df_ta_date[df_ta_date["BU"].isin(selected_bu_ta)].copy()
+
         # Nettoyage des dates TBC
         aujourd_hui = pd.to_datetime(date.today())
         df_ta_valid = df_ta.copy()
@@ -2087,7 +2118,7 @@ elif selected =="RAPPORT CLIENT":
         with col1:
             st.markdown(f"""
             <div class="card">
-                <h2>{format_montant(total_ca_budget_global)} €</h2>
+                <h2>{format_montant(total_ca_budget_global)}</h2>
                 <p>Total CA</p>
                 <div class="delta positive">100%</div>
             </div>
@@ -2096,7 +2127,7 @@ elif selected =="RAPPORT CLIENT":
         with col2:
             st.markdown(f"""
             <div class="card">
-                <h2>{format_montant(total_ca_realise)} €</h2>
+                <h2>{format_montant(total_ca_realise)}</h2>
                 <p>Total CA Réalisé</p>
                 <div class="delta {get_delta_class(total_ca_realise / total_ca_budget_global * 100)}">{(total_ca_realise / total_ca_budget_global * 100):.0f}%</div>
             </div>
@@ -2121,7 +2152,7 @@ elif selected =="RAPPORT CLIENT":
         with col3:
             st.markdown(f"""
             <div class="card">
-                <h2>{format_montant(solde_ta)} €</h2>
+                <h2>{format_montant(solde_ta)}</h2>
                 <p>Solde Restant</p>
                 <div class="delta {get_delta_class(percentage_remaining_ta)}">{percentage_remaining_ta:.0f}%</div>
             </div>
