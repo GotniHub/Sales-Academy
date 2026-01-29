@@ -445,6 +445,45 @@ elif selected == "RAPPORT FINANCE":
         return ['background-color: rgba(0, 51, 160, 0.3)' for _ in row]
 
     with tab1: 
+        def parse_euro_series(s: pd.Series) -> pd.Series:
+            """Convertit une série '1,234.56 €' en float 1234.56"""
+            return pd.to_numeric(
+                s.astype(str)
+                .str.replace("€", "", regex=False)
+                .str.replace("\u202f", "", regex=False)   # espace fine insécable
+                .str.replace("\xa0", "", regex=False)     # espace insécable
+                .str.replace(" ", "", regex=False)
+                .str.replace(",", "", regex=False),       # retire séparateur milliers
+                errors="coerce"
+            ).fillna(0)
+
+        def count_participants_from_bdd(df_participants: pd.DataFrame, population_filter: str | None = None) -> int:
+            """
+            Compte les participants DISTINCTS depuis 'BDD Participants 2025'.
+            - Unicité: Email si dispo, sinon Nom+Prénom
+            - Filtre sur colonne 'Population' si population_filter est fourni
+            """
+            dfp = df_participants.copy()
+
+            dfp["Population"] = dfp["Population"].astype(str).str.strip().str.lower()
+            dfp["Email"] = dfp["Email"].astype(str).str.strip().str.lower()
+            dfp["Nom"] = dfp["Nom"].astype(str).str.strip().str.upper()
+            dfp["Prénom"] = dfp["Prénom"].astype(str).str.strip().str.upper()
+
+            # ID participant: Email si présent, sinon Nom+Prénom
+            dfp["participant_id"] = np.where(
+                dfp["Email"].notna() & (dfp["Email"] != "") & (dfp["Email"] != "nan"),
+                dfp["Email"],
+                dfp["Nom"] + "|" + dfp["Prénom"]
+            )
+
+            if population_filter and population_filter.lower().strip() != "toute population":
+                pop = population_filter.lower().strip()
+                dfp = dfp[dfp["Population"] == pop]
+
+            return int(dfp["participant_id"].nunique())
+
+        
             # ----------- 🔹 Bloc 1 : Formations seules -----------
             #                 # --- KPIs ---
             # Sauvegarder une version non filtrée pour les KPI globaux
@@ -627,26 +666,42 @@ elif selected == "RAPPORT FINANCE":
 
 
         with col5:
-            # 🎯 Filtre optionnel par population pour analyse
-            populations = df_form["Population"].dropna().unique()
-            selected_population = st.selectbox("Filtrer par population", options=["Toute population"] + list(populations))
+            if df_participants is None or "Population" not in df_participants.columns:
+                st.warning("⚠️ Impossible de lire 'BDD Participants 2025' → fallback sur Nb participant du calendrier.")
+                populations = df_form["Population"].dropna().unique()
+                selected_population = st.selectbox("Filtrer par population", options=["Toute population"] + list(populations))
 
-            # ➕ Appliquer le filtre sur la population
-            if selected_population != "Toute population":
-                df_filtered = df_form[df_form["Population"] == selected_population]
+                df_filtered = df_form if selected_population == "Toute population" else df_form[df_form["Population"] == selected_population]
+
+                nb_part = pd.to_numeric(df_filtered["Nb participant"], errors="coerce").sum()
+                cout_total = parse_euro_series(df_filtered["Cout formateur"]).sum()
+                cout_moyen_filtered = cout_total / nb_part if nb_part != 0 else 0
+
             else:
-                df_filtered = df_form
+                # ✅ Populations depuis la base participants (source de vérité)
+                pop_list = (
+                    df_participants["Population"]
+                    .dropna()
+                    .astype(str).str.strip().str.lower()
+                    .unique()
+                )
+                pop_list = sorted([p for p in pop_list if p and p != "nan"])
 
-            # ➕ Recalcul du coût moyen par participant
-            nb_part = pd.to_numeric(df_filtered["Nb participant"], errors='coerce').sum()
-            cout_total = pd.to_numeric(
-                df_filtered["Cout formateur"]
-                .astype(str)
-                .str.replace("€", "")
-                .str.replace(",", ""),
-                errors="coerce"
-            ).sum()
-            cout_moyen_filtered = cout_total / nb_part if nb_part != 0 else 0
+                selected_population = st.selectbox(
+                    "Filtrer par population",
+                    options=["Toute population"] + pop_list
+                )
+
+                # ➕ Filtrer les coûts côté formations sur la même population
+                df_filtered = df_form if selected_population == "Toute population" else df_form[df_form["Population"] == selected_population]
+
+                cout_total = parse_euro_series(df_filtered["Cout formateur"]).sum()
+
+                # ✅ Denominateur = nb participants DISTINCTS depuis BDD Participants 2025
+                nb_participants_bdd = count_participants_from_bdd(df_participants, selected_population)
+
+                cout_moyen_filtered = cout_total / nb_participants_bdd if nb_participants_bdd != 0 else 0
+
             st.markdown(f"""
             <div class="card">
                 <h2>{cout_moyen_filtered:,.2f} €</h2>
@@ -1646,46 +1701,64 @@ elif selected =="RAPPORT CLIENT":
             key=f"form_bu_filter_{start_date}_{end_date}"
         )
 
-        # 🔹 Filtre sur "Maintenue / Annulée"
-        maintenue_list = df_form["Maintenue / Annulée"].dropna().unique().tolist()
-        maintenue_list = sorted(maintenue_list, key=lambda x: x.lower().strip())  # Tri propre
+        # =========================
+        # ✅ 4) Filtre Statut (appliqué SUR df_form_date)
+        # =========================
+        df_form_date["Maintenue / Annulée"] = df_form_date["Maintenue / Annulée"].astype(str).str.strip().str.capitalize()
+
+        maintenue_list = sorted(df_form_date["Maintenue / Annulée"].dropna().unique().tolist(), key=lambda x: x.lower().strip())
+
         st.sidebar.subheader("📘 Filtrage des Formations")
         selected_maintenue = st.sidebar.multiselect(
-            "Filtrer les Formations par Statut (Maintenue / Annulée)", 
-            options=maintenue_list, 
+            "Filtrer les Formations par Statut (Maintenue / Annulée)",
+            options=maintenue_list,
             default=maintenue_list,
-            key="maintenue_filter"
+            key="maintenue_filter_form"
         )
 
-        # Application du filtre
-        df_form = df_form[df_form["Maintenue / Annulée"].isin(selected_maintenue)]
-        # Calcul AVANT de filtrer
-        nb_formations_global = df_form_original["Module"].count()
+        # ✅ df_form = données finales filtrées : Date + BU + Statut
+        df_form = df_form_date[
+            (df_form_date["BU"].isin(selected_bu_form)) &
+            (df_form_date["Maintenue / Annulée"].isin(selected_maintenue))
+        ].copy()
 
-        # ✅ Appliquer BU sur les données déjà filtrées date
-        df_form = df_form_date[df_form_date["BU"].isin(selected_bu_form)].copy()
+        # =========================
+        # ✅ KPI "Réalisées / Totales" (dans le contexte filtré)
+        # =========================
+        nb_formations_total = df_form["Module"].count()
 
-
-        # ✅ CA Réalisé = seulement "Réalisée" parmi les données filtrées par date
         df_realisees = df_form[df_form["Maintenue / Annulée"].str.lower().str.strip() == "réalisée"].copy()
+        nb_formations_realisees = df_realisees["Module"].count()
+        # =========================
+        # ✅ CA (Budget) et CA Réalisé
+        # =========================
 
+        # Nettoyage CA sur df_form_original (pour budget)
+        df_form_original["CA"] = pd.to_numeric(
+            df_form_original["CA"].astype(str).str.replace("€", "").str.replace(",", ""),
+            errors="coerce"
+        ).fillna(0)
+
+        # Nettoyage CA sur df_realisees (pour réalisé)
         df_realisees["CA"] = pd.to_numeric(
             df_realisees["CA"].astype(str).str.replace("€", "").str.replace(",", ""),
             errors="coerce"
         ).fillna(0)
-        total_ca_realise = df_realisees["CA"].sum()
 
-        # ➤ CA Budget (sans filtre de date, mais avec filtre BU)
+        # ✅ Budget = sans filtre date, MAIS avec filtre BU (comme tu faisais avant)
         df_form_budget = df_form_original[df_form_original["BU"].isin(selected_bu_form)].copy()
-        df_form_budget["CA"] = pd.to_numeric(
-            df_form_budget["CA"].astype(str).str.replace("€", "").str.replace(",", ""),
-            errors="coerce"
-        ).fillna(0)
         total_ca = df_form_budget["CA"].sum()
 
+        # ✅ Réalisé = uniquement les "réalisées" dans le contexte filtré (date + BU + statut)
+        total_ca_realise = df_realisees["CA"].sum()
 
-        # ➤ Nombre de formations filtrées
-        nb_formations_filtrées = df_form["Module"].count()
+        # Solde et %
+        solde_restant = total_ca - total_ca_realise
+        percentage_budget_remaining = (solde_restant / total_ca) * 100 if total_ca != 0 else 0
+
+        pourcentage_formations = (nb_formations_realisees / nb_formations_total) * 100 if nb_formations_total != 0 else 0
+
+
 
         st.subheader("Indicateurs Clés")
         st.markdown("""
@@ -1774,8 +1847,6 @@ elif selected =="RAPPORT CLIENT":
         solde_restant = total_ca - total_ca_realise
         percentage_budget_remaining = (solde_restant / total_ca ) * 100 if total_ca  != 0 else 0
 
-        pourcentage_formations = (nb_formations_filtrées / nb_formations_global) * 100 if nb_formations_global != 0 else 0
-
 
         def get_delta_class(delta):
             return "positive" if delta >= 0 else "negative"
@@ -1810,12 +1881,12 @@ elif selected =="RAPPORT CLIENT":
         with col4:
             st.markdown(f"""
             <div class="card">
-            <h2>{nb_formations_filtrées} / {nb_formations_global}</h2>
-            <p>Nb de Formations (Réalisées / Totales)</p>
-            <div class="delta positive">{pourcentage_formations:.0f}%</div>
-
+                <h2>{nb_formations_realisees} / {nb_formations_total}</h2>
+                <p>Nb de Formations (Réalisées / Totales)</p>
+                <div class="delta positive">{pourcentage_formations:.0f}%</div>
             </div>
             """, unsafe_allow_html=True)
+
 
         # ===== Ventilation Formations par BU (Nb Participants corrigé via df_participants) =====
 
@@ -1869,10 +1940,10 @@ elif selected =="RAPPORT CLIENT":
             lambda row: (row["Maintenu (à réaliser)"] / row["CA"]) * 100 if row["CA"] != 0 else 0,
             axis=1
         )
-        ventilation_form["Coût moyen par participant"] = ventilation_form.apply(
-            lambda row: row["CA Réalisé"] / row["Nb Participants"] if row["Nb Participants"] > 0 else 0,
-            axis=1
-        )
+        # ventilation_form["Coût moyen par participant"] = ventilation_form.apply(
+        #     lambda row: row["CA Réalisé"] / row["Nb Participants"] if row["Nb Participants"] > 0 else 0,
+        #     axis=1
+        # )
 
         styled_ventilation_form = ventilation_form.style.format({
             "CA": "{:,.2f} €",
@@ -1880,8 +1951,8 @@ elif selected =="RAPPORT CLIENT":
             "Maintenu (à réaliser)": "{:,.2f} €",
             "% Ecart": "{:.0f} %",
             "Nb Formations": "{:.0f}",
-            "Nb Participants": "{:.0f}",
-            "Coût moyen par participant": "{:,.2f} €"
+            "Nb Participants": "{:.0f}"
+            # "Coût moyen par participant": "{:,.2f} €"
         }).apply(blue_row_style, axis=1).applymap(highlight_zeros, subset=["CA Réalisé", "Maintenu (à réaliser)", "% Ecart"])
 
         st.dataframe(styled_ventilation_form)
