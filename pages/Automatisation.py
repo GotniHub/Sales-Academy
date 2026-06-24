@@ -1316,7 +1316,7 @@ elif selected == "RAPPORT FINANCE":
             df_resume[col] = df_resume.apply(lambda row: format_euro_or_percent(row[col], row.name), axis=1)
         df_resume_styled = df_resume.style
         for col in df_resume.columns:
-            df_resume_styled = df_resume_styled.applymap(lambda v: highlight_columns_resume(v, col), subset=[col])
+            df_resume_styled = df_resume_styled.map(lambda v: highlight_columns_resume(v, col), subset=[col])
 
         df_resume_styled = df_resume.style.apply(highlight_columns_resume, axis=None)
         st.dataframe(df_resume_styled, hide_index=True)
@@ -2061,7 +2061,7 @@ elif selected =="RAPPORT CLIENT":
             "Nb Formations": "{:.0f}",
             # "Nb Participants": "{:.0f}"
             # "Coût moyen par participant": "{:,.2f} €"
-        }).apply(blue_row_style, axis=1).applymap(highlight_zeros, subset=["CA Réalisé", "Maintenu (à réaliser)", "% Ecart"])
+        }).apply(blue_row_style, axis=1).map(highlight_zeros, subset=["CA Réalisé", "Maintenu (à réaliser)", "% Ecart"])
 
         st.dataframe(styled_ventilation_form, hide_index=True)
         # ===== Ventilation Formations par GROUPES =====
@@ -2085,7 +2085,7 @@ elif selected =="RAPPORT CLIENT":
         styled_grp = ventilation_grp.style.format({
             "CA": "{:,.2f} €", "CA Réalisé": "{:,.2f} €", "Maintenu (à réaliser)": "{:,.2f} €",
             "% Ecart": "{:.0f} %", "Nb Formations": "{:.0f}", "Nb Participants": "{:.0f}",
-        }).apply(blue_row_style, axis=1).applymap(highlight_zeros, subset=["CA Réalisé", "Maintenu (à réaliser)", "% Ecart"])
+        }).apply(blue_row_style, axis=1).map(highlight_zeros, subset=["CA Réalisé", "Maintenu (à réaliser)", "% Ecart"])
 
         st.dataframe(styled_grp, hide_index=True)
         # Préparation des colonnes
@@ -2113,7 +2113,7 @@ elif selected =="RAPPORT CLIENT":
 
         styled_form = df_form_display.style.format({
             "CA réalisé": "{:,.2f} €"
-        }).apply(blue_row_style, axis=1).applymap(highlight_zeros, subset=["CA réalisé"])
+        }).apply(blue_row_style, axis=1).map(highlight_zeros, subset=["CA réalisé"])
 
         st.dataframe(styled_form, hide_index=True)
 
@@ -2518,7 +2518,7 @@ elif selected =="RAPPORT CLIENT":
         # ✅ Appliquer les styles
         styled_ventilation = ventilation_ta.style \
             .apply(blue_row_style, axis=1) \
-            .applymap(highlight_zeros, subset=["CA (Réalisé)", "Maintenu (à réaliser)", "% Ecart"]) \
+            .map(highlight_zeros, subset=["CA (Réalisé)", "Maintenu (à réaliser)", "% Ecart"]) \
             .format({
                 "CA": "{:,.2f} €",
                 "CA (Réalisé)": "{:,.2f} €",
