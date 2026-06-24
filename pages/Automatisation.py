@@ -2156,7 +2156,7 @@ elif selected =="RAPPORT CLIENT":
         df_real_group = df_monthly_realise.groupby("Mois")[["CA"]].sum().cumsum().rename(columns={"CA": "CA réalisé Cumulé"})
 
         # ➕ Fusion des deux courbes
-        df_grouped_form = pd.concat([df_budget_group, df_real_group], axis=1).fillna(method="ffill").fillna(0).reset_index()
+        df_grouped_form = pd.concat([df_budget_group, df_real_group], axis=1).ffill().fillna(0).reset_index()
 
         # ➕ Long format
         df_form_long = df_grouped_form.melt(id_vars="Mois", var_name="Type", value_name="Montant (€)")
@@ -2600,7 +2600,7 @@ elif selected =="RAPPORT CLIENT":
         df_reel_grouped = df_reel_grouped.rename(columns={"CA (Réalisé)": "CA réalisé Cumulé"})
 
         # Fusion
-        df_grouped_ta = pd.merge(df_budget_grouped, df_reel_grouped, on="Mois", how="outer").fillna(method="ffill").fillna(0)
+        df_grouped_ta = pd.merge(df_budget_grouped, df_reel_grouped, on="Mois", how="outer").ffill().fillna(0)
 
         # Format long pour graphique
         df_ta_long = df_grouped_ta.melt(id_vars="Mois", var_name="Type", value_name="Montant (€)")
