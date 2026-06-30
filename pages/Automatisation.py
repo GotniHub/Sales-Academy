@@ -97,7 +97,7 @@ population_pu_data = {
 # Données CA pour TA (Budget par type de TA)
 ta_budget_data = {
     "observation": 1000,
-    "suivi & contrôle": 1000
+    "suivi": 1000
 }
 
 if selected == "Importation & Calculs":
@@ -910,7 +910,7 @@ elif selected == "RAPPORT FINANCE":
 
         # TA par type
         obs_ta = ta_count_filtered[ta_count_filtered["Type de TA"] == "observation"].set_index("BU")["Nb TA"]
-        suivi_ta = ta_count_filtered[ta_count_filtered["Type de TA"] == "suivi & contrôle"].set_index("BU")["Nb TA"]
+        suivi_ta = ta_count_filtered[ta_count_filtered["Type de TA"] == "suivi"].set_index("BU")["Nb TA"]
 
         # Fusionner les deux colonnes
         ventilation_ta["Nb TA Observation"] = ventilation_ta["BU"].map(obs_ta).fillna(0).astype(int)
@@ -2256,7 +2256,7 @@ elif selected =="RAPPORT CLIENT":
         # ➕ Répartition CA Réalisé par type de TA
         ca_realise_by_type = df_ta_valid.groupby("Type de TA")["Budget Unitaire"].sum().to_dict()
         ca_obs = ca_realise_by_type.get("observation", 0)
-        ca_suivi = ca_realise_by_type.get("suivi & contrôle", 0)
+        ca_suivi = ca_realise_by_type.get("suivi", 0)
 
         # 3. Calcul global vs filtré
         # nb_ta_global = df_ta_original.shape[0]
@@ -2285,7 +2285,7 @@ elif selected =="RAPPORT CLIENT":
 
         # TA par type
         obs_ta = ta_count_filtered[ta_count_filtered["Type de TA"] == "observation"].set_index("BU")["Nb TA"]
-        suivi_ta = ta_count_filtered[ta_count_filtered["Type de TA"] == "suivi & contrôle"].set_index("BU")["Nb TA"]
+        suivi_ta = ta_count_filtered[ta_count_filtered["Type de TA"] == "suivi"].set_index("BU")["Nb TA"]
 
         # Fusionner les deux colonnes
         ventilation_ta["Nb TA Observation"] = ventilation_ta["BU"].map(obs_ta).fillna(0).astype(int)
@@ -2337,7 +2337,7 @@ elif selected =="RAPPORT CLIENT":
             with st.expander("🔍 Détails CA Réalisé par type de TA"):
                 total_ta_valid = len(df_ta_valid)
                 nb_obs = len(df_ta_valid[df_ta_valid["Type de TA"] == "observation"])
-                nb_suivi = len(df_ta_valid[df_ta_valid["Type de TA"] == "suivi & contrôle"])
+                nb_suivi = len(df_ta_valid[df_ta_valid["Type de TA"] == "suivi"])
 
                 pct_obs = (nb_obs / total_ta_valid * 100) if total_ta_valid > 0 else 0
                 pct_suivi = (nb_suivi / total_ta_valid * 100) if total_ta_valid > 0 else 0
@@ -2372,8 +2372,8 @@ elif selected =="RAPPORT CLIENT":
         nb_obs_total = len(df_ta_original[df_ta_original["Type de TA"] == "observation"])
         nb_obs_realisees = len(df_ta_valid[df_ta_valid["Type de TA"] == "observation"])
 
-        nb_suivi_total = len(df_ta_original[df_ta_original["Type de TA"] == "suivi & contrôle"])
-        nb_suivi_realisees = len(df_ta_valid[df_ta_valid["Type de TA"] == "suivi & contrôle"])
+        nb_suivi_total = len(df_ta_original[df_ta_original["Type de TA"] == "suivi"])
+        nb_suivi_realisees = len(df_ta_valid[df_ta_valid["Type de TA"] == "suivi"])
 
         # =========================================
         # 🔹 Ligne 2 : Indicateurs par Type de TA
@@ -2387,7 +2387,7 @@ elif selected =="RAPPORT CLIENT":
         obs_pourcentage = (obs_reel / obs_budget * 100) if obs_budget != 0 else 0
 
         # --- Suivi & Contrôle ---
-        suivi_budget = ta_budget_data.get("suivi & contrôle", 0) * total_ta_suivi
+        suivi_budget = ta_budget_data.get("suivi", 0) * total_ta_suivi
         suivi_reel = ca_suivi
         suivi_solde = suivi_budget - suivi_reel
         suivi_pourcentage = (suivi_reel / suivi_budget * 100) if suivi_budget != 0 else 0
