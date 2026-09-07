@@ -1660,7 +1660,9 @@ elif selected =="RAPPORT CLIENT":
     })
 
     def get_formateur_cost(name):
-        return pu_data.get(name.lower().strip(), 600)
+        if pd.isna(name):
+            return 600
+        return pu_data.get(str(name).strip().lower(), 600)
 
     df_ta["Coût unitaire"] = df_ta["Formateur"].map(get_formateur_cost)
     df_ta["CA réalisé"] = df_ta["Nb jours"] * df_ta["Coût unitaire"]
