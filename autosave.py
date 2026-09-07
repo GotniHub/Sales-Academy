@@ -4,6 +4,7 @@ import io
 from streamlit_option_menu import option_menu
 import plotly.express as px
 import matplotlib.pyplot as plt
+import numpy as np
 import plotly.graph_objects as go
 from PIL import Image  # ← tu dois avoir cette ligne
 
@@ -85,7 +86,6 @@ pu_data = {
 # Données par défaut pour PU / FORMATION en fonction de la Population (pour 1.5 jours)
 population_pu_data = {
     "sales team": 3500,
-    "sales/mktg team": 3500,
     "kam": 4000,
     "manager": 4000,
     "mm": 4000,
@@ -325,14 +325,15 @@ elif selected == "RAPPORT FINANCE":
     bu_mapping_norm = {normalize_bu(k): normalize_bu(v) for k, v in bu_mapping.items()}
 
     def get_participants_par_bu(df_participants: pd.DataFrame) -> pd.DataFrame:
-        """Retourne un DF: BU_clean | Nb Participants (une ligne = une inscription)."""
+        """Retourne un DF: BU_clean | Nb Participants (uniques Nom+Prénom)"""
         dfp = df_participants.copy()
         dfp["BU_clean"] = dfp["Groupes"].apply(normalize_bu).replace(bu_mapping_norm)
         dfp["Nom"] = dfp["Nom"].astype(str).str.strip().str.upper()
         dfp["Prénom"] = dfp["Prénom"].astype(str).str.strip().str.upper()
 
-        # Chaque ligne de la BDD compte, même si le participant apparaît plusieurs fois.
-        out = dfp["BU_clean"].value_counts().reset_index()
+        dfp_unique = dfp.drop_duplicates(subset=["BU_clean", "Nom", "Prénom"])
+
+        out = dfp_unique["BU_clean"].value_counts().reset_index()
         out.columns = ["BU_clean", "Nb Participants"]
         return out
     
@@ -463,20 +464,29 @@ elif selected == "RAPPORT FINANCE":
 
         def count_participants_from_bdd(df_participants: pd.DataFrame, population_filter: str | None = None) -> int:
             """
-            Compte les inscriptions depuis 'BDD Participants 2026'.
-            - Chaque ligne compte, y compris les doublons
+            Compte les participants DISTINCTS depuis 'BDD Participants 2026'.
+            - Unicité: Email si dispo, sinon Nom+Prénom
             - Filtre sur colonne 'Population' si population_filter est fourni
             """
             dfp = df_participants.copy()
 
             dfp["Population"] = dfp["Population"].astype(str).str.strip().str.lower()
+            dfp["Email"] = dfp["Email"].astype(str).str.strip().str.lower()
+            dfp["Nom"] = dfp["Nom"].astype(str).str.strip().str.upper()
+            dfp["Prénom"] = dfp["Prénom"].astype(str).str.strip().str.upper()
+
+            # ID participant: Email si présent, sinon Nom+Prénom
+            dfp["participant_id"] = np.where(
+                dfp["Email"].notna() & (dfp["Email"] != "") & (dfp["Email"] != "nan"),
+                dfp["Email"],
+                dfp["Nom"] + "|" + dfp["Prénom"]
+            )
 
             if population_filter and population_filter.lower().strip() != "toute population":
                 pop = population_filter.lower().strip()
                 dfp = dfp[dfp["Population"] == pop]
 
-            # Chaque ligne de la BDD compte, même si le participant apparaît plusieurs fois.
-            return int(dfp.shape[0])
+            return int(dfp["participant_id"].nunique())
 
         
             # ----------- 🔹 Bloc 1 : Formations seules -----------
@@ -692,7 +702,7 @@ elif selected == "RAPPORT FINANCE":
 
         #         cout_total = parse_euro_series(df_filtered["Cout formateur"]).sum()
 
-        #         # ✅ Dénominateur = nb d'inscriptions depuis BDD Participants 2026
+        #         # ✅ Denominateur = nb participants DISTINCTS depuis BDD Participants 2026
         #         nb_participants_bdd = count_participants_from_bdd(df_participants, selected_population)
 
         #         cout_moyen_filtered = cout_total / nb_participants_bdd if nb_participants_bdd != 0 else 0
@@ -1543,8 +1553,10 @@ elif selected =="RAPPORT CLIENT":
         dfp["Nom"] = dfp["Nom"].astype(str).str.strip().str.upper()
         dfp["Prénom"] = dfp["Prénom"].astype(str).str.strip().str.upper()
 
-        # Chaque ligne de la BDD compte, même si le participant apparaît plusieurs fois.
-        out = dfp["BU_clean"].value_counts().reset_index()
+        # Unicité : BU + Nom + Prénom
+        dfp_unique = dfp.drop_duplicates(subset=["BU_clean", "Nom", "Prénom"])
+
+        out = dfp_unique["BU_clean"].value_counts().reset_index()
         out.columns = ["BU_clean", "Nb Participants"]
         return out
     
@@ -1556,7 +1568,7 @@ elif selected =="RAPPORT CLIENT":
         return str(s).strip().upper() if pd.notnull(s) else s
 
     def get_nb_participants_par_bu_via_groupes(df_form, df_participants):
-        """Nb d'inscriptions de participants par BU.
+        """Nb de participants DISTINCTS (Nom+Prénom) par BU.
         Lien : 'Groupes' de Formations 2026  ↔  'Groupes' de BDD Participants 2026.
         Retourne un dict { BU_normalisée : nb_participants }."""
         if df_participants is None:
@@ -1566,6 +1578,9 @@ elif selected =="RAPPORT CLIENT":
         f["__grp"] = f["Groupes"].apply(_norm_groupe)
         f["__bu"]  = f["BU"].apply(normalize_bu)
         p["__grp"] = p["Groupes"].apply(_norm_groupe)
+        p["__nom"] = p["Nom"].astype(str).str.strip().str.upper()
+        p["__pre"] = p["Prénom"].astype(str).str.strip().str.upper()
+
         bu_to_groupes = (
             f.dropna(subset=["__bu"])
              .groupby("__bu")["__grp"]
@@ -1574,31 +1589,36 @@ elif selected =="RAPPORT CLIENT":
         out = {}
         for bu, groupes in bu_to_groupes.items():
             sub = p[p["__grp"].isin(groupes)]
-            out[bu] = int(sub.shape[0])
+            out[bu] = int(sub.drop_duplicates(subset=["__nom", "__pre"]).shape[0])
         return out
 
-    def get_nb_participants_total_via_groupes(df_form, df_participants):
-        """Nb total d'inscriptions de participants pour les groupes affichés."""
+    def get_nb_participants_distinct_total_via_groupes(df_form, df_participants):
+        """Nb de participants DISTINCTS au global (toutes BU affichées),
+        SANS double comptage des groupes partagés (ex : FRANCE)."""
         if df_participants is None:
             return 0
         f = df_form.copy()
         p = df_participants.copy()
         groupes = set(g for g in f["Groupes"].apply(_norm_groupe) if pd.notnull(g))
         p["__grp"] = p["Groupes"].apply(_norm_groupe)
+        p["__nom"] = p["Nom"].astype(str).str.strip().str.upper()
+        p["__pre"] = p["Prénom"].astype(str).str.strip().str.upper()
         sub = p[p["__grp"].isin(groupes)]
-        return int(sub.shape[0])
+        return int(sub.drop_duplicates(subset=["__nom", "__pre"]).shape[0])
     
     def get_nb_participants_par_groupe(df_participants, groupes_autorises=None):
-            """Nb d'inscriptions de participants par Groupe (BDD Participants 2026).
+            """Nb de participants DISTINCTS (Nom+Prénom) par Groupe (BDD Participants 2026).
             groupes_autorises : itérable de groupes normalisés à conserver (sinon tous)."""
             if df_participants is None:
                 return {}
             p = df_participants.copy()
             p["__grp"] = p["Groupes"].apply(_norm_groupe)
+            p["__nom"] = p["Nom"].astype(str).str.strip().str.upper()
+            p["__pre"] = p["Prénom"].astype(str).str.strip().str.upper()
             p = p.dropna(subset=["__grp"])
             if groupes_autorises is not None:
                 p = p[p["__grp"].isin(set(groupes_autorises))]
-            return p.groupby("__grp").size().to_dict()
+            return p.drop_duplicates(subset=["__grp", "__nom", "__pre"]).groupby("__grp").size().to_dict()
 
     def get_ventilation_formations_par_groupe(df_form, df_participants):
         """Ventilation des formations par Groupes (colonne 'Groupes' de Formations 2026)."""
@@ -2015,7 +2035,7 @@ elif selected =="RAPPORT CLIENT":
         total_form = pd.DataFrame({
             "BU": ["Total"],
             "Nb Formations": [ventilation_form["Nb Formations"].sum()],
-            # "Nb Participants": [get_nb_participants_total_via_groupes(df_form, df_participants)],
+            # "Nb Participants": [get_nb_participants_distinct_total_via_groupes(df_form, df_participants)],
             "CA": [ventilation_form["CA"].sum()],
             "CA Réalisé": [ventilation_form["CA Réalisé"].sum()]
         })
@@ -2051,7 +2071,7 @@ elif selected =="RAPPORT CLIENT":
         total_grp = pd.DataFrame({
             "Groupes": ["Total"],
             "Nb Formations": [ventilation_grp["Nb Formations"].sum()],
-            "Nb Participants": [get_nb_participants_total_via_groupes(df_form, df_participants)],
+            "Nb Participants": [get_nb_participants_distinct_total_via_groupes(df_form, df_participants)],
             "CA": [ventilation_grp["CA"].sum()],
             "CA Réalisé": [ventilation_grp["CA Réalisé"].sum()],
         })
@@ -2991,7 +3011,7 @@ elif selected =="RAPPORT CLIENT":
                 int(df_form[df_form["Groupe_clean"].isin(groupes_list)]["Formateur 1"].nunique()),
                 int(ta_obs[ta_obs["Groupe_clean"].isin(groupes_list)].shape[0]),
                 int(ta_suivi[ta_suivi["Groupe_clean"].isin(groupes_list)].shape[0]),
-                get_nb_participants_total_via_groupes(df_form, df_participants),
+                get_nb_participants_distinct_total_via_groupes(df_form, df_participants),
             ]
 
             df_summary = pd.DataFrame(data_summary)
