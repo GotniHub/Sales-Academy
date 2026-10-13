@@ -1,0 +1,47 @@
+:root { --academy-blue: #0033A0; --academy-ink: #16243B; --academy-muted: #64748B; }
+.stApp, .stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp p, .stApp label, .stApp input, .stApp button, .mission-info-table { font-family: "Segoe UI", Arial, sans-serif !important; }
+[data-testid="stAppViewContainer"] { background: #F5F7FB; }
+/* Reserve space for Streamlit's fixed toolbar above the logo and navigation. */
+.block-container, [data-testid="stMainBlockContainer"] { padding-top: 5.25rem !important; padding-bottom: 3rem !important; max-width: 1600px; }
+[data-testid="stHeader"] { background: rgba(245,247,251,.95); }
+[data-testid="stSidebar"] { background: #FFFFFF; border-right: 1px solid #E3E9F2; }
+[data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3 { font-size: 1rem; color: #0033A0; }
+h1, h2, h3, h4 { color: #16243B; letter-spacing: -.025em; }
+[data-testid="stHeadingWithActionElements"] h2 { font-size: 1.3rem; margin-top: 1rem; }
+.academy-hero { background: linear-gradient(115deg, #071F52, #0033A0 68%, #254DAF); border-radius: 20px; padding: 30px 36px; margin: 18px 0 24px; color: #FFF; box-shadow: 0 12px 30px rgba(0,35,110,.12); }
+.academy-hero h1 { font-size: clamp(1.75rem, 3vw, 2.5rem); color: #FFF !important; padding: 8px 0 10px; font-weight: 700; }
+.academy-hero p { font-size: 1rem; line-height: 1.6; color: #D8E5FF; margin: 0; max-width: 850px; }
+.academy-eyebrow { font-size: .7rem; letter-spacing: .16em; font-weight: 700; color: #AFC8FF; }
+.academy-brand { font-size: .72rem; font-weight: 700; letter-spacing: .16em; color: #697B96; margin: 4px 0 8px; }
+.academy-step { background: #FFF; border: 1px solid #E3E9F2; border-radius: 16px; padding: 24px; min-height: 176px; }
+.academy-step > span { display: inline-block; color: #0033A0; font-size: .75rem; font-weight: 700; padding: 5px 10px; background: #EAF0FF; border-radius: 7px; }
+.academy-step h3 { font-size: 1.15rem; margin-top: 12px; }
+.academy-step p { color: #64748B; font-size: .9rem; }
+/* Roles and the theme cover current widgets; BaseWeb selectors cover older releases. */
+.stTabs [role="tablist"], .stTabs [data-baseweb="tab-list"] { gap: 5px !important; padding: 6px !important; background: #E8EDF6 !important; border-radius: 12px; margin-bottom: 16px; }
+.stTabs [role="tab"], .stTabs [data-baseweb="tab"] { height: 42px !important; border-radius: 8px !important; padding: 0 20px !important; background: transparent !important; font-weight: 600 !important; color: #506079 !important; }
+.stApp .stTabs [aria-selected="true"] { background: #FFF !important; color: #0033A0 !important; box-shadow: 0 2px 7px rgba(21,43,82,.1); }
+.stTabs [data-baseweb="tab-highlight"], .stTabs [data-baseweb="tab-border"] { background: transparent !important; }
+[data-baseweb="tag"] { background: #0033A0 !important; color: #FFF !important; border-radius: 6px !important; font-weight: 600; }
+[data-testid="stMultiSelect"], [data-testid="stDateInput"], [data-testid="stNumberInput"] { margin-bottom: 4px; }
+[data-testid="stWidgetLabel"] p { color: #506079; font-size: .85rem; font-weight: 500; }
+[data-testid="stFileUploader"] { background: #FFF; border: 1px dashed #AFC0DA; border-radius: 16px; padding: 10px 14px; }
+[data-testid="stButton"] button, [data-testid="stDownloadButton"] button, [data-testid="stPageLink"] a { border-radius: 9px; font-weight: 600; }
+/* Existing report cards share one identity regardless of local style blocks. */
+.card { background: #FFF !important; border: 1px solid #E3E9F2 !important; border-top: 3px solid #0033A0 !important; border-radius: 14px !important; padding: 22px 20px !important; margin: 6px 0 16px !important; min-height: 167px; text-align: left !important; box-shadow: 0 4px 15px rgba(22,36,59,.035) !important; display: flex; flex-direction: column; justify-content: center; }
+.card h2 { font-size: clamp(1.45rem, 2vw, 1.95rem) !important; line-height: 1.25; font-weight: 700; color: #16243B !important; padding: 0 !important; margin: 0 0 10px !important; }
+.card h3 { color: #64748B !important; font-size: .76rem !important; font-weight: 600; margin: 0 0 14px !important; padding: 0 !important; }
+.card p { color: #64748B !important; font-size: .88rem !important; margin: 0 !important; }
+.card .delta { font-size: .78rem !important; font-weight: 600; margin-top: 12px !important; }
+.card .positive { color: #137966 !important; }
+.card .negative { color: #B43B46 !important; }
+[data-testid="stMetric"] { background: #FFF; border: 1px solid #DFE7F4; border-radius: 14px; padding: 18px 22px; margin-bottom: 12px; }
+[data-testid="stMetricValue"] { color: #0033A0; font-size: 1.9rem; font-weight: 700; }
+[data-testid="stDataFrame"], [data-testid="stPlotlyChart"] { border-radius: 12px; overflow: hidden; border: 1px solid #E3E9F2; background: #FFF; }
+[data-testid="stExpander"] { border-radius: 12px; background: #FFF; }
+.mission-info-table { border: 1px solid #DFE7F2 !important; border-collapse: separate !important; border-spacing: 0; border-radius: 12px !important; box-shadow: none !important; margin-top: 12px !important; font-size: .86rem !important; }
+.mission-info-table th { background: #0D2D67 !important; padding: 13px 15px !important; border: none !important; white-space: nowrap; }
+.mission-info-table td { padding: 12px 15px !important; border: none !important; border-bottom: 1px solid #E7EDF5 !important; color: #34445E; }
+.mission-info-table td:first-child { background: #EFF4FC !important; color: #173C78; }
+.academy-table-scroll { overflow-x: auto; }
+@media (max-width: 760px) { .block-container, [data-testid="stMainBlockContainer"] { padding: 5rem 1rem 1.5rem !important; } .academy-hero { padding: 24px; border-radius: 14px; } .card { min-height: 135px; } }

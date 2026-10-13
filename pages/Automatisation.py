@@ -4,29 +4,39 @@ import io
 from streamlit_option_menu import option_menu
 import plotly.express as px
 import matplotlib.pyplot as plt
-import numpy as np
 import plotly.graph_objects as go
-from PIL import Image  # ← tu dois avoir cette ligne
+from PIL import Image
+from reporting import (
+    prepare_formations, clean_ta, count_total, counts_by_group,
+    counts_by_bu, add_unique_participants, normalize_text,
+)
+from ui import apply_theme, page_header, audience_metrics, ROOT
+
+st.set_page_config(page_title="Sales Academy | Pilotage", page_icon="📊", layout="wide")
+apply_theme()
 
 
 # 👇 AJOUTE LE CODE DU LOGO ICI
-logo = Image.open("Logo Sales Academy.png")
+logo = Image.open(ROOT / "Logo Sales Academy.png")
 
 # --- NAVBAR ---
 with st.container():
     col1, col2 = st.columns([2, 12])
     with col1:
-        st.image(logo, width=180)
+        st.image(logo, width=145)
     with col2:
         selected = option_menu(
             menu_title=None,
             options=["Importation & Calculs","RAPPORT FINANCE","RAPPORT CLIENT"],
             icons=["upload", "bar-chart-line", "briefcase", "cash-stack", "file-earmark-text"],
             menu_icon="cast",
+            key="academy_navigation",
             default_index=0,
             orientation="horizontal",
             styles={
-                "nav-link-selected": {"background-color": "#0033A0", "color": "white"},
+                "container": {"padding": "6px", "background-color": "#E8EDF6", "border-radius": "12px"},
+                "nav-link": {"font-size": "14px", "border-radius": "8px", "margin": "2px", "color": "#506079"},
+                "nav-link-selected": {"background-color": "#0033A0", "color": "white", "font-weight": "600"},
             }
         )
 
@@ -86,6 +96,7 @@ pu_data = {
 # Données par défaut pour PU / FORMATION en fonction de la Population (pour 1.5 jours)
 population_pu_data = {
     "sales team": 3500,
+    "sales/mktg team": 3500,
     "kam": 4000,
     "manager": 4000,
     "mm": 4000,
@@ -102,7 +113,7 @@ ta_budget_data = {
 
 if selected == "Importation & Calculs":
 
-    st.title("Importation & Calculs")
+    page_header("Importation & calculs", "Chargez votre planning, ajustez les paramètres et préparez vos rapports.")
 
     # Fonction pour modifier les données dans la sidebar
     def modify_data_in_sidebar(default_formation_prepa, default_pu, default_population_pu):
@@ -197,16 +208,17 @@ if selected == "Importation & Calculs":
         return calendar_df
 
     # Streamlit app
-    st.title("Calcul des Champs avec Données par Défaut")
+    st.subheader("Votre planning de formation")
+    st.caption("Les tarifs et les durées de préparation sont modifiables dans le panneau latéral.")
 
 
     # Téléchargement du fichier calendrier
 
-    calendar_file = st.file_uploader("Téléchargez le fichier Calendrier (Test_file.xlsx)", type="xlsx")
+    calendar_file = st.file_uploader("Importer le planning Excel", type="xlsx")
 
     if calendar_file:
         # Lecture simple de la feuille sans calcul
-        calendar_df = pd.read_excel(calendar_file, sheet_name="Formations 2026", header=2)
+        calendar_df = prepare_formations(pd.read_excel(calendar_file, sheet_name="Formations 2026", header=2))
         
         st.subheader("📄 Aperçu des données importées (brutes)")
         st.dataframe(calendar_df, hide_index=True)
@@ -273,7 +285,7 @@ if selected == "Importation & Calculs":
         )
 
 elif selected == "RAPPORT FINANCE":
-    st.title("Rapport Finance - Ventilation par BU")
+    page_header("Rapport finance", "Suivez le chiffre d’affaires, les coûts et la rentabilité par business unit.", "SALES ACADEMY · FINANCE")
 
     # Fonction de conversion des trimestres et de "Février"
     def convert_trimestre_to_date(trimestre):
@@ -294,7 +306,7 @@ elif selected == "RAPPORT FINANCE":
         return pd.to_datetime(trimestre, errors="coerce")
 
     if "result_df" in st.session_state:
-        df_form = st.session_state["result_df"].copy()
+        df_form = prepare_formations(st.session_state["result_df"])
     else:
         st.error("Veuillez d'abord importer et calculer les données dans 'Importation & Calculs'.")
         st.stop()
@@ -325,16 +337,15 @@ elif selected == "RAPPORT FINANCE":
     bu_mapping_norm = {normalize_bu(k): normalize_bu(v) for k, v in bu_mapping.items()}
 
     def get_participants_par_bu(df_participants: pd.DataFrame) -> pd.DataFrame:
-        """Retourne un DF: BU_clean | Nb Participants (uniques Nom+Prénom)"""
+        """Retourne un DF: BU_clean | Nb Participations (une ligne = une inscription)."""
         dfp = df_participants.copy()
         dfp["BU_clean"] = dfp["Groupes"].apply(normalize_bu).replace(bu_mapping_norm)
         dfp["Nom"] = dfp["Nom"].astype(str).str.strip().str.upper()
         dfp["Prénom"] = dfp["Prénom"].astype(str).str.strip().str.upper()
 
-        dfp_unique = dfp.drop_duplicates(subset=["BU_clean", "Nom", "Prénom"])
-
-        out = dfp_unique["BU_clean"].value_counts().reset_index()
-        out.columns = ["BU_clean", "Nb Participants"]
+        # Chaque ligne de la BDD compte, même si le participant apparaît plusieurs fois.
+        out = dfp["BU_clean"].value_counts().reset_index()
+        out.columns = ["BU_clean", "Nb Participations"]
         return out
     
     df_participants = None
@@ -353,7 +364,7 @@ elif selected == "RAPPORT FINANCE":
     df_form["Population"] = df_form["Population"].astype(str).str.lower().str.strip()
 
     df_ta.columns = df_ta.iloc[0]
-    df_ta = df_ta[1:]
+    df_ta = clean_ta(df_ta.iloc[1:])
     df_ta["Type de TA"] = df_ta["Type de TA"].astype(str).str.lower().str.strip()
     df_ta["BU"] = df_ta["Groupe"].astype(str).str.strip()
     df_ta["Formateur"] = df_ta["Formateur"].astype(str).str.strip().str.lower()
@@ -370,24 +381,26 @@ elif selected == "RAPPORT FINANCE":
 
     form_count = df_form.groupby(["BU", "Population"]).agg({
         "Module": "count",
-        "Nb participant": lambda x: pd.to_numeric(x, errors="coerce").sum(),
+        "Nb participations": lambda x: pd.to_numeric(x, errors="coerce").sum(),
         "CA": lambda x: pd.to_numeric(x.astype(str).str.replace("€", "").str.replace(",", ""), errors="coerce").sum(),
         "Cout formateur": lambda x: pd.to_numeric(x.astype(str).str.replace("€", "").str.replace(",", ""), errors="coerce").sum()
     }).reset_index().rename(columns={
         "Module": "Nb Formations",
-        "Nb participant": "Nb Participants",
+        "Nb participations": "Nb Participations",
         "CA": "Budget (Formation)",
         "Cout formateur": "Réel (Formation)"
     })
 
     def get_formateur_cost(name):
-        return pu_data.get(name.lower().strip(), 600)
+        if pd.isna(name):
+            return 600
+        return pu_data.get(str(name).lower().strip(), 600)
 
     df_ta["Coût unitaire"] = df_ta["Formateur"].map(get_formateur_cost)
     df_ta["CA réalisé"] = df_ta["Nb jours"] * df_ta["Coût unitaire"]
 
     ta_count = df_ta.groupby(["BU", "Type de TA"]).agg({
-        "Participant": "count",
+        "Participant": "size",
         "Nb jours": "sum",
         "CA réalisé": "sum"
     }).reset_index().rename(columns={
@@ -403,7 +416,7 @@ elif selected == "RAPPORT FINANCE":
 
     merged = form_count.groupby("BU").agg({
         "Nb Formations": "sum",
-        "Nb Participants": "sum",
+        "Nb Participations": "sum",
         "Budget (Formation)": "sum",
         "Réel (Formation)": "sum"
     }).reset_index()
@@ -424,30 +437,14 @@ elif selected == "RAPPORT FINANCE":
     #     "Réel Total": "{:,.2f} €"
     # }))
 
-    # CSS personnalisé pour les onglets st.tabs
-    st.markdown("""
-    <style>
-        .stTabs [data-baseweb="tab-list"] {
-            gap: 8px;
-        }
-        .stTabs [data-baseweb="tab"] {
-            background-color: #F3F4F6;
-            border-radius: 4px 4px 0px 0px;
-            padding: 8px 16px;
-            color: #4B5563;
-        }
-        .stTabs [aria-selected="true"] {
-            background-color: #1E3A8A !important;
-            color: white !important;
-        }
-    </style>
-    """, unsafe_allow_html=True)
-    
+    df_ta_all = df_ta.copy()
+    df_form_all = df_form.copy()
+
     # Initialisation des onglets
     tab1, tab2, tab3 = st.tabs(["📘 Formations par BU", "📙 TA par BU", "📉 Rentabilité WSA"])
 
     def blue_row_style(row):
-        return ['background-color: rgba(0, 51, 160, 0.3)' for _ in row]
+        return ['background-color: #DEE9FC; font-weight: 600' if str(row.iloc[0]) == "Total" else 'background-color: #FFFFFF' for _ in row]
 
     with tab1: 
         def parse_euro_series(s: pd.Series) -> pd.Series:
@@ -464,29 +461,20 @@ elif selected == "RAPPORT FINANCE":
 
         def count_participants_from_bdd(df_participants: pd.DataFrame, population_filter: str | None = None) -> int:
             """
-            Compte les participants DISTINCTS depuis 'BDD Participants 2026'.
-            - Unicité: Email si dispo, sinon Nom+Prénom
+            Compte les inscriptions depuis 'BDD Participants 2026'.
+            - Chaque ligne compte, y compris les doublons
             - Filtre sur colonne 'Population' si population_filter est fourni
             """
             dfp = df_participants.copy()
 
             dfp["Population"] = dfp["Population"].astype(str).str.strip().str.lower()
-            dfp["Email"] = dfp["Email"].astype(str).str.strip().str.lower()
-            dfp["Nom"] = dfp["Nom"].astype(str).str.strip().str.upper()
-            dfp["Prénom"] = dfp["Prénom"].astype(str).str.strip().str.upper()
-
-            # ID participant: Email si présent, sinon Nom+Prénom
-            dfp["participant_id"] = np.where(
-                dfp["Email"].notna() & (dfp["Email"] != "") & (dfp["Email"] != "nan"),
-                dfp["Email"],
-                dfp["Nom"] + "|" + dfp["Prénom"]
-            )
 
             if population_filter and population_filter.lower().strip() != "toute population":
                 pop = population_filter.lower().strip()
                 dfp = dfp[dfp["Population"] == pop]
 
-            return int(dfp["participant_id"].nunique())
+            # Chaque ligne de la BDD compte, même si le participant apparaît plusieurs fois.
+            return int(dfp.shape[0])
 
         
             # ----------- 🔹 Bloc 1 : Formations seules -----------
@@ -606,12 +594,12 @@ elif selected == "RAPPORT FINANCE":
         
         ventilation_form = df_form.groupby(["BU"]).agg({
             "Module": "count",
-            "Nb participant": lambda x: pd.to_numeric(x, errors="coerce").sum(),
+            "Nb participations": lambda x: pd.to_numeric(x, errors="coerce").sum(),
             "CA": lambda x: pd.to_numeric(x.astype(str).str.replace("€", "").str.replace(",", ""), errors="coerce").sum(),
             "Cout formateur": lambda x: pd.to_numeric(x.astype(str).str.replace("€", "").str.replace(",", ""), errors="coerce").sum()
         }).reset_index().rename(columns={
             "Module": "Nb Formations",
-            "Nb participant": "Nb Participants",
+            "Nb participations": "Nb Participations",
             "CA": "CA",
             "Cout formateur": "Coût (Réel)"
         })
@@ -678,7 +666,7 @@ elif selected == "RAPPORT FINANCE":
 
         #         df_filtered = df_form if selected_population == "Toute population" else df_form[df_form["Population"] == selected_population]
 
-        #         nb_part = pd.to_numeric(df_filtered["Nb participant"], errors="coerce").sum()
+        #         nb_part = pd.to_numeric(df_filtered["Nb participations"], errors="coerce").sum()
         #         cout_total = parse_euro_series(df_filtered["Cout formateur"]).sum()
         #         cout_moyen_filtered = cout_total / nb_part if nb_part != 0 else 0
 
@@ -702,7 +690,7 @@ elif selected == "RAPPORT FINANCE":
 
         #         cout_total = parse_euro_series(df_filtered["Cout formateur"]).sum()
 
-        #         # ✅ Denominateur = nb participants DISTINCTS depuis BDD Participants 2026
+        #         # ✅ Dénominateur = nb d'inscriptions depuis BDD Participants 2026
         #         nb_participants_bdd = count_participants_from_bdd(df_participants, selected_population)
 
         #         cout_moyen_filtered = cout_total / nb_participants_bdd if nb_participants_bdd != 0 else 0
@@ -715,7 +703,9 @@ elif selected == "RAPPORT FINANCE":
         #     """, unsafe_allow_html=True)
 
 
-        # --- Ventilation Formations par BU (avec Nb Participants corrigé via df_participants) ---
+        audience_metrics(df_form, df_participants)
+
+        # --- Ventilation Formations par BU (avec Nb Participations corrigé via df_participants) ---
 
         # 1) Base ventilation (Formations / CA / Coût)
         ventilation_form = (
@@ -724,6 +714,7 @@ elif selected == "RAPPORT FINANCE":
             .agg(
                 **{
                     "Nb Formations": ("Module", "count"),
+                    "Nb Participations": ("Nb participations", lambda x: pd.to_numeric(x, errors="coerce").sum()),
                     "CA": ("CA", lambda x: pd.to_numeric(x.astype(str).str.replace("€", "").str.replace(",", ""), errors="coerce").sum()),
                     "Coût Formateur": ("Cout formateur", lambda x: pd.to_numeric(x.astype(str).str.replace("€", "").str.replace(",", ""), errors="coerce").sum()),
                 }
@@ -731,24 +722,26 @@ elif selected == "RAPPORT FINANCE":
             .reset_index()
         )
 
-        # # 2) Ajouter Nb Participants si df_participants dispo
+        # # 2) Ajouter Nb Participations si df_participants dispo
         # if df_participants is not None:
-        #     participants_par_bu = get_participants_par_bu(df_participants)  # BU_clean | Nb Participants
+        #     participants_par_bu = get_participants_par_bu(df_participants)  # BU_clean | Nb Participations
         #     ventilation_form = ventilation_form.merge(participants_par_bu, on="BU_clean", how="left")
-        #     ventilation_form["Nb Participants"] = ventilation_form["Nb Participants"].fillna(0).astype(int)
+        #     ventilation_form["Nb Participations"] = ventilation_form["Nb Participations"].fillna(0).astype(int)
         # else:
-        #     ventilation_form["Nb Participants"] = 0
+        #     ventilation_form["Nb Participations"] = 0
 
         # 3) Renommer BU_clean -> BU pour affichage
         ventilation_form = ventilation_form.rename(columns={"BU_clean": "BU"})
-        ventilation_form = ventilation_form[["BU", "Nb Formations", "CA", "Coût Formateur"]]
+        ventilation_form = add_unique_participants(ventilation_form, df_form, df_participants)
+        ventilation_form = ventilation_form[["BU", "Nb Formations", "Nb Participations", "Nb Participants", "CA", "Coût Formateur"]]
 
         st.subheader("Ventilation Formations par BU")
         # ➕ Ligne de total
         total_form = pd.DataFrame({
             "BU": ["Total"],
             "Nb Formations": [ventilation_form["Nb Formations"].sum()],
-            # "Nb Participants": [ventilation_form["Nb Participants"].sum()],
+            "Nb Participations": [ventilation_form["Nb Participations"].sum()],
+            "Nb Participants": [count_total(df_form, df_participants, unique=True) if df_participants is not None else pd.NA],
             "CA": [ventilation_form["CA"].sum()],
             "Coût Formateur": [ventilation_form["Coût Formateur"].sum()]
         })
@@ -762,7 +755,7 @@ elif selected == "RAPPORT FINANCE":
             axis=1
         )
         # ventilation_form["Coût moyen par participant"] = ventilation_form.apply(
-        #     lambda row: row["Coût Formateur"] / row["Nb Participants"] if row["Nb Participants"] > 0 else 0,
+        #     lambda row: row["Coût Formateur"] / row["Nb Participations"] if row["Nb Participations"] > 0 else 0,
         #     axis=1
         # )
 
@@ -775,7 +768,7 @@ elif selected == "RAPPORT FINANCE":
                 "Rentabilité": "{:,.2f} €",
                 "% Rentabilité": "{:.0f} %",
                 "Nb Formations": "{:.0f}",
-                # "Nb Participants": "{:.0f}",
+                "Nb Participations": "{:.0f}", "Nb Participants": "{:.0f}",
                 "Coût moyen par participant": "{:,.2f} €"
             })
         )
@@ -841,6 +834,7 @@ elif selected == "RAPPORT FINANCE":
         
 
     with tab2:
+        df_ta = df_ta_all.copy()
         # ----------- 🔹 Bloc 2 : TA seules ----------
 
         # 1. Sauvegarder la version non filtrée pour KPI global
@@ -894,7 +888,7 @@ elif selected == "RAPPORT FINANCE":
 
         # Recalculer le ta_count à partir du df_ta filtré
         ta_count_filtered = df_ta.groupby(["BU", "Type de TA"]).agg({
-            "Participant": "count",
+            "Participant": "size",
             "Nb jours": "sum",
             "CA réalisé": "sum"
         }).reset_index().rename(columns={
@@ -1067,6 +1061,8 @@ elif selected == "RAPPORT FINANCE":
         st.plotly_chart(fig_ta, use_container_width=True)
 
     with tab3:
+        df_form = df_form_all.copy()
+        df_ta = df_ta_all.copy()
                 # --- Mise en forme avec couleurs personnalisées
         def highlight_type(row):
             color = ""
@@ -1476,7 +1472,7 @@ elif selected == "RAPPORT FINANCE":
         # )
 
 elif selected =="RAPPORT CLIENT":
-    st.title("Rapport Client - Ventilation par BU")
+    page_header("Rapport client", "Formations, tournées accompagnées et budgets : une vue claire de votre activité.", "SALES ACADEMY · ACTIVITÉ")
     # Fonction de conversion des trimestres et de "Février"
     def convert_trimestre_to_date(trimestre):
         if isinstance(trimestre, str):
@@ -1505,14 +1501,14 @@ elif selected =="RAPPORT CLIENT":
         return f"{x:,.2f}".replace(",", " ").replace(".", ",") + " €"
 
     if "result_df" in st.session_state:
-        df_form = st.session_state["result_df"].copy()
+        df_form = prepare_formations(st.session_state["result_df"])
     else:
         st.error("Veuillez d'abord importer et calculer les données dans 'Importation & Calculs'.")
         st.stop()
 
     df_ta = pd.read_excel(st.session_state["calendar_file"], sheet_name="TA 2026")
 
-    # ===== Participants (pour Nb Participants corrigé) =====
+    # ===== Participants (pour Nb Participations corrigé) =====
     df_participants = None
     try:
         df_participants = pd.read_excel(
@@ -1553,11 +1549,9 @@ elif selected =="RAPPORT CLIENT":
         dfp["Nom"] = dfp["Nom"].astype(str).str.strip().str.upper()
         dfp["Prénom"] = dfp["Prénom"].astype(str).str.strip().str.upper()
 
-        # Unicité : BU + Nom + Prénom
-        dfp_unique = dfp.drop_duplicates(subset=["BU_clean", "Nom", "Prénom"])
-
-        out = dfp_unique["BU_clean"].value_counts().reset_index()
-        out.columns = ["BU_clean", "Nb Participants"]
+        # Chaque ligne de la BDD compte, même si le participant apparaît plusieurs fois.
+        out = dfp["BU_clean"].value_counts().reset_index()
+        out.columns = ["BU_clean", "Nb Participations"]
         return out
     
 # ===========================================================
@@ -1567,58 +1561,14 @@ elif selected =="RAPPORT CLIENT":
     def _norm_groupe(s):
         return str(s).strip().upper() if pd.notnull(s) else s
 
-    def get_nb_participants_par_bu_via_groupes(df_form, df_participants):
-        """Nb de participants DISTINCTS (Nom+Prénom) par BU.
-        Lien : 'Groupes' de Formations 2026  ↔  'Groupes' de BDD Participants 2026.
-        Retourne un dict { BU_normalisée : nb_participants }."""
-        if df_participants is None:
-            return {}
-        f = df_form.copy()
-        p = df_participants.copy()
-        f["__grp"] = f["Groupes"].apply(_norm_groupe)
-        f["__bu"]  = f["BU"].apply(normalize_bu)
-        p["__grp"] = p["Groupes"].apply(_norm_groupe)
-        p["__nom"] = p["Nom"].astype(str).str.strip().str.upper()
-        p["__pre"] = p["Prénom"].astype(str).str.strip().str.upper()
+    def get_nb_participations_par_bu_via_groupes(df_form, df_participants):
+        return counts_by_bu(df_form, df_participants)
 
-        bu_to_groupes = (
-            f.dropna(subset=["__bu"])
-             .groupby("__bu")["__grp"]
-             .apply(lambda s: set(g for g in s if pd.notnull(g)))
-        )
-        out = {}
-        for bu, groupes in bu_to_groupes.items():
-            sub = p[p["__grp"].isin(groupes)]
-            out[bu] = int(sub.drop_duplicates(subset=["__nom", "__pre"]).shape[0])
-        return out
+    def get_nb_participations_total_via_groupes(df_form, df_participants):
+        return count_total(df_form, df_participants)
 
-    def get_nb_participants_distinct_total_via_groupes(df_form, df_participants):
-        """Nb de participants DISTINCTS au global (toutes BU affichées),
-        SANS double comptage des groupes partagés (ex : FRANCE)."""
-        if df_participants is None:
-            return 0
-        f = df_form.copy()
-        p = df_participants.copy()
-        groupes = set(g for g in f["Groupes"].apply(_norm_groupe) if pd.notnull(g))
-        p["__grp"] = p["Groupes"].apply(_norm_groupe)
-        p["__nom"] = p["Nom"].astype(str).str.strip().str.upper()
-        p["__pre"] = p["Prénom"].astype(str).str.strip().str.upper()
-        sub = p[p["__grp"].isin(groupes)]
-        return int(sub.drop_duplicates(subset=["__nom", "__pre"]).shape[0])
-    
-    def get_nb_participants_par_groupe(df_participants, groupes_autorises=None):
-            """Nb de participants DISTINCTS (Nom+Prénom) par Groupe (BDD Participants 2026).
-            groupes_autorises : itérable de groupes normalisés à conserver (sinon tous)."""
-            if df_participants is None:
-                return {}
-            p = df_participants.copy()
-            p["__grp"] = p["Groupes"].apply(_norm_groupe)
-            p["__nom"] = p["Nom"].astype(str).str.strip().str.upper()
-            p["__pre"] = p["Prénom"].astype(str).str.strip().str.upper()
-            p = p.dropna(subset=["__grp"])
-            if groupes_autorises is not None:
-                p = p[p["__grp"].isin(set(groupes_autorises))]
-            return p.drop_duplicates(subset=["__grp", "__nom", "__pre"]).groupby("__grp").size().to_dict()
+    def get_nb_participations_par_groupe(df_participants, groupes_autorises=None):
+        return counts_by_group(df_participants, groupes_autorises)
 
     def get_ventilation_formations_par_groupe(df_form, df_participants):
         """Ventilation des formations par Groupes (colonne 'Groupes' de Formations 2026)."""
@@ -1640,17 +1590,19 @@ elif selected =="RAPPORT CLIENT":
         out = base.merge(realise, on="__grp", how="left")
         out["CA Réalisé"] = out["CA Réalisé"].fillna(0)
 
-        nb = get_nb_participants_par_groupe(df_participants, out["__grp"].tolist())
-        out["Nb Participants"] = out["__grp"].map(nb).fillna(0).astype(int)
+        nb = get_nb_participations_par_groupe(df_participants, out["__grp"].tolist())
+        out["Nb Participations"] = out["__grp"].map(nb).fillna(0).astype(int)
+        unique_counts = counts_by_group(df_participants, out["__grp"].tolist(), unique=True)
+        out["Nb Participants"] = out["__grp"].map(unique_counts).fillna(0).astype(int) if df_participants is not None else pd.NA
 
         out = out.rename(columns={"__grp": "Groupes"})
-        return out[["Groupes", "Nb Formations", "Nb Participants", "CA", "CA Réalisé"]]
+        return out[["Groupes", "Nb Formations", "Nb Participations", "Nb Participants", "CA", "CA Réalisé"]]
    
     df_form["BU"] = df_form["BU"].astype(str).str.strip()
     df_form["Population"] = df_form["Population"].astype(str).str.lower().str.strip()
 
     df_ta.columns = df_ta.iloc[0]
-    df_ta = df_ta[1:]
+    df_ta = clean_ta(df_ta.iloc[1:])
     df_ta["Type de TA"] = df_ta["Type de TA"].astype(str).str.lower().str.strip()
     df_ta["BU"] = df_ta["Groupe"].astype(str).str.strip()
     df_ta["Formateur"] = df_ta["Formateur"].astype(str).str.strip().str.lower()
@@ -1667,24 +1619,26 @@ elif selected =="RAPPORT CLIENT":
 
     form_count = df_form.groupby(["BU", "Population"]).agg({
         "Module": "count",
-        "Nb participant": lambda x: pd.to_numeric(x, errors="coerce").sum(),
+        "Nb participations": lambda x: pd.to_numeric(x, errors="coerce").sum(),
         "CA": lambda x: pd.to_numeric(x.astype(str).str.replace("€", "").str.replace(",", ""), errors="coerce").sum(),
         "Cout formateur": lambda x: pd.to_numeric(x.astype(str).str.replace("€", "").str.replace(",", ""), errors="coerce").sum()
     }).reset_index().rename(columns={
         "Module": "Nb Formations",
-        "Nb participant": "Nb Participants",
+        "Nb participations": "Nb Participations",
         "CA": "Budget (Formation)",
         "Cout formateur": "Réel (Formation)"
     })
 
     def get_formateur_cost(name):
-        return pu_data.get(name.lower().strip(), 600)
+        if pd.isna(name):
+            return 600
+        return pu_data.get(str(name).lower().strip(), 600)
 
     df_ta["Coût unitaire"] = df_ta["Formateur"].map(get_formateur_cost)
     df_ta["CA réalisé"] = df_ta["Nb jours"] * df_ta["Coût unitaire"]
 
     ta_count = df_ta.groupby(["BU", "Type de TA"]).agg({
-        "Participant": "count",
+        "Participant": "size",
         "Nb jours": "sum",
         "CA réalisé": "sum"
     }).reset_index().rename(columns={
@@ -1700,7 +1654,7 @@ elif selected =="RAPPORT CLIENT":
 
     merged = form_count.groupby("BU").agg({
         "Nb Formations": "sum",
-        "Nb Participants": "sum",
+        "Nb Participations": "sum",
         "Budget (Formation)": "sum",
         "Réel (Formation)": "sum"
     }).reset_index()
@@ -1721,31 +1675,15 @@ elif selected =="RAPPORT CLIENT":
     #     "Réel Total": "{:,.2f} €"
     # }))
 
-    # CSS personnalisé pour les onglets st.tabs
-    st.markdown("""
-    <style>
-        .stTabs [data-baseweb="tab-list"] {
-            gap: 8px;
-        }
-        .stTabs [data-baseweb="tab"] {
-            background-color: #F3F4F6;
-            border-radius: 4px 4px 0px 0px;
-            padding: 8px 16px;
-            color: #4B5563;
-        }
-        .stTabs [aria-selected="true"] {
-            background-color: #1E3A8A !important;
-            color: white !important;
-        }
-    </style>
-    """, unsafe_allow_html=True)
-    
+    df_ta_all = df_ta.copy()
+    df_form_all = df_form.copy()
+
     # Initialisation des onglets
     # tab1, tab2, tab3, tab4 = st.tabs(["📘 Formations WSA", "📙 TA WSA ", "⚙️ Ingénierie WSA","📊 Ventilation Budgets"])
     tab1, tab2, tab3 = st.tabs(["📘 Formations WSA", "📙 TA WSA ","📊 Ventilation Budgets"])
     # 🎨 Fonction pour colorer les lignes en bleu très clair
     def blue_row_style(row):
-        return ['background-color: rgba(0, 51, 160, 0.3)' for _ in row]
+        return ['background-color: #DEE9FC; font-weight: 600' if str(row.iloc[0]) == "Total" else 'background-color: #FFFFFF' for _ in row]
 
     # 🔴 Fonction pour colorer en rouge les zéros dans les colonnes concernées
     def highlight_zeros(val):
@@ -1922,11 +1860,11 @@ elif selected =="RAPPORT CLIENT":
         # Indicateurs filtrés (avec filtre de date)
         df_indics_bu = df_form.groupby("BU").agg({
             "Module": "count",
-            "Nb participant": lambda x: pd.to_numeric(x, errors="coerce").sum(),
+            "Nb participations": lambda x: pd.to_numeric(x, errors="coerce").sum(),
             "Cout formateur": lambda x: pd.to_numeric(x.astype(str).str.replace("€", "").str.replace(",", ""), errors="coerce").sum()
         }).reset_index().rename(columns={
             "Module": "Nb Formations",
-            "Nb participant": "Nb Participants",
+            "Nb participations": "Nb Participations",
             "Cout formateur": "Coût (Réel)"
         })
         # ➕ Ajout de la colonne "CA" nettoyée pour traitement
@@ -2000,7 +1938,9 @@ elif selected =="RAPPORT CLIENT":
             """, unsafe_allow_html=True)
 
 
-        # ===== Ventilation Formations par BU (Nb Participants corrigé via df_participants) =====
+        audience_metrics(df_form, df_participants)
+
+        # ===== Ventilation Formations par BU (Nb Participations corrigé via df_participants) =====
 
         # 1) Budget par BU (filtré BU uniquement, pas de date)
         df_budget_bu = df_form_budget.groupby("BU").agg({"CA": "sum"}).reset_index().rename(columns={"CA": "CA"})
@@ -2010,18 +1950,19 @@ elif selected =="RAPPORT CLIENT":
 
         # 3) Nb Formations (depuis df_form filtré date+BU)
         df_indics_bu = df_form.groupby("BU").agg({
-            "Module": "count"
-        }).reset_index().rename(columns={"Module": "Nb Formations"})
+            "Module": "count",
+            "Nb participations": lambda x: pd.to_numeric(x, errors="coerce").sum()
+        }).reset_index().rename(columns={"Module": "Nb Formations", "Nb participations": "Nb Participations"})
 
-        # # 4) Nb Participants corrigé depuis la feuille Participants (sur la même BU filtrée)
-        # # 4) Nb Participants : reliés via la colonne "Groupes" (Formations 2026 ↔ BDD Participants 2026)
+        # # 4) Nb Participations corrigé depuis la feuille Participants (sur la même BU filtrée)
+        # # 4) Nb Participations : reliés via la colonne "Groupes" (Formations 2026 ↔ BDD Participants 2026)
         # if df_participants is not None:
-        #     nb_part_par_bu = get_nb_participants_par_bu_via_groupes(df_form, df_participants)
-        #     df_indics_bu["Nb Participants"] = (
+        #     nb_part_par_bu = get_nb_participations_par_bu_via_groupes(df_form, df_participants)
+        #     df_indics_bu["Nb Participations"] = (
         #         df_indics_bu["BU"].apply(normalize_bu).map(nb_part_par_bu).fillna(0).astype(int)
         #     )
         # else:
-        #     df_indics_bu["Nb Participants"] = 0
+        #     df_indics_bu["Nb Participations"] = 0
 
         # 5) Fusion finale
         ventilation_form = df_indics_bu \
@@ -2030,12 +1971,15 @@ elif selected =="RAPPORT CLIENT":
             .fillna(0)
 
 
+        ventilation_form = add_unique_participants(ventilation_form, df_form, df_participants)
         st.subheader("Ventilation Formations par BU")
+        st.caption("Participations par BU : cumul du planning de formations. Participants uniques : Nom + Prénom dans la BDD, reliés aux groupes de chaque BU. Le total des personnes est dédupliqué entre les BU.")
         # ➕ Ligne de total
         total_form = pd.DataFrame({
             "BU": ["Total"],
             "Nb Formations": [ventilation_form["Nb Formations"].sum()],
-            # "Nb Participants": [get_nb_participants_distinct_total_via_groupes(df_form, df_participants)],
+            "Nb Participations": [ventilation_form["Nb Participations"].sum()],
+            "Nb Participants": [count_total(df_form, df_participants, unique=True) if df_participants is not None else pd.NA],
             "CA": [ventilation_form["CA"].sum()],
             "CA Réalisé": [ventilation_form["CA Réalisé"].sum()]
         })
@@ -2049,7 +1993,7 @@ elif selected =="RAPPORT CLIENT":
             axis=1
         )
         # ventilation_form["Coût moyen par participant"] = ventilation_form.apply(
-        #     lambda row: row["CA Réalisé"] / row["Nb Participants"] if row["Nb Participants"] > 0 else 0,
+        #     lambda row: row["CA Réalisé"] / row["Nb Participations"] if row["Nb Participations"] > 0 else 0,
         #     axis=1
         # )
 
@@ -2059,7 +2003,7 @@ elif selected =="RAPPORT CLIENT":
             "Maintenu (à réaliser)": "{:,.2f} €",
             "% Ecart": "{:.0f} %",
             "Nb Formations": "{:.0f}",
-            # "Nb Participants": "{:.0f}"
+            "Nb Participations": "{:.0f}", "Nb Participants": "{:.0f}",
             # "Coût moyen par participant": "{:,.2f} €"
         }).apply(blue_row_style, axis=1).map(highlight_zeros, subset=["CA Réalisé", "Maintenu (à réaliser)", "% Ecart"])
 
@@ -2071,7 +2015,8 @@ elif selected =="RAPPORT CLIENT":
         total_grp = pd.DataFrame({
             "Groupes": ["Total"],
             "Nb Formations": [ventilation_grp["Nb Formations"].sum()],
-            "Nb Participants": [get_nb_participants_distinct_total_via_groupes(df_form, df_participants)],
+            "Nb Participations": [get_nb_participations_total_via_groupes(df_form, df_participants)],
+            "Nb Participants": [count_total(df_form, df_participants, unique=True) if df_participants is not None else pd.NA],
             "CA": [ventilation_grp["CA"].sum()],
             "CA Réalisé": [ventilation_grp["CA Réalisé"].sum()],
         })
@@ -2084,7 +2029,7 @@ elif selected =="RAPPORT CLIENT":
 
         styled_grp = ventilation_grp.style.format({
             "CA": "{:,.2f} €", "CA Réalisé": "{:,.2f} €", "Maintenu (à réaliser)": "{:,.2f} €",
-            "% Ecart": "{:.0f} %", "Nb Formations": "{:.0f}", "Nb Participants": "{:.0f}",
+            "% Ecart": "{:.0f} %", "Nb Formations": "{:.0f}", "Nb Participations": "{:.0f}", "Nb Participants": "{:.0f}",
         }).apply(blue_row_style, axis=1).map(highlight_zeros, subset=["CA Réalisé", "Maintenu (à réaliser)", "% Ecart"])
 
         st.dataframe(styled_grp, hide_index=True)
@@ -2186,6 +2131,7 @@ elif selected =="RAPPORT CLIENT":
         
 
     with tab2:
+        df_ta = df_ta_all.copy()
         def format_montant(x):
             if pd.isnull(x):
                 return ""
@@ -2228,7 +2174,7 @@ elif selected =="RAPPORT CLIENT":
         )
 
         # ➕ Calculer le budget total sans appliquer le filtre de date
-        df_ta_bu_only = df_ta_date[df_ta_date["BU"].isin(selected_bu_ta)]
+        df_ta_bu_only = df_ta_date[df_ta_date["BU"].isin(selected_bu_ta)].copy()
 
         df_ta_bu_only["Budget Unitaire"] = df_ta_bu_only["Type de TA"].map(ta_budget_data).fillna(0)
         total_ca_budget_global = df_ta_bu_only["Budget Unitaire"].sum()
@@ -2263,13 +2209,15 @@ elif selected =="RAPPORT CLIENT":
         # nb_ta_filtrées = df_ta.shape[0]
         #pourcentage_ta = (nb_ta_filtrées / nb_ta_global) * 100 if nb_ta_global != 0 else 0
         # Comptage global des TA totales et réalisées
-        nb_ta_total = df_ta_original.shape[0]
+        df_ta_scope = df_ta_original[df_ta_original["BU"].isin(selected_bu_ta)].copy()
+        nb_ta_total = len(df_ta_scope)
         nb_ta_realisees = df_ta_valid.shape[0]
         pourcentage_ta = (nb_ta_realisees / nb_ta_total) * 100 if nb_ta_total != 0 else 0
+        st.caption("Total des TA : toutes les Observation et Suivi des BU sélectionnées. Le réalisé et le CA sont filtrés sur la période choisie. Les dates à confirmer restent dans le total planifié.")
 
         # Recalculer le ta_count à partir du df_ta filtré
         ta_count_filtered = df_ta.groupby(["BU", "Type de TA"]).agg({
-            "Participant": "count",
+            "Participant": "size",
             "Nb jours": "sum",
             "CA réalisé": "sum"
         }).reset_index().rename(columns={
@@ -2369,16 +2317,16 @@ elif selected =="RAPPORT CLIENT":
             </div>
             """, unsafe_allow_html=True)
         # Comptage par type (Observation / Suivi)
-        nb_obs_total = len(df_ta_original[df_ta_original["Type de TA"] == "observation"])
+        nb_obs_total = len(df_ta_scope[df_ta_scope["Type de TA"] == "observation"])
         nb_obs_realisees = len(df_ta_valid[df_ta_valid["Type de TA"] == "observation"])
 
-        nb_suivi_total = len(df_ta_original[df_ta_original["Type de TA"] == "suivi"])
+        nb_suivi_total = len(df_ta_scope[df_ta_scope["Type de TA"] == "suivi"])
         nb_suivi_realisees = len(df_ta_valid[df_ta_valid["Type de TA"] == "suivi"])
 
         # =========================================
         # 🔹 Ligne 2 : Indicateurs par Type de TA
         # =========================================
-        st.markdown("<br><hr><h4>Indicateurs par Type de TA</h4>", unsafe_allow_html=True)
+        st.subheader("Indicateurs par type de TA")
 
         # --- Observation ---
         obs_budget = ta_budget_data.get("observation", 0) * total_ta_obs
@@ -2399,7 +2347,7 @@ elif selected =="RAPPORT CLIENT":
             st.markdown(f"""
             <div class="card">
                 <h3>Observation</h3>
-                <h2>{format_montant(obs_budget)} €</h2>
+                <h2>{format_montant(obs_budget)}</h2>
                 <p>CA Budget</p>
                 <div class="delta positive">100%</div>
             </div>
@@ -2409,7 +2357,7 @@ elif selected =="RAPPORT CLIENT":
             st.markdown(f"""
             <div class="card">
                 <h3>Observation</h3>
-                <h2>{format_montant(obs_reel)} €</h2>
+                <h2>{format_montant(obs_reel)}</h2>
                 <p>CA Réalisé</p>
                 <div class="delta positive">{obs_pourcentage:.0f}%</div>
             </div>
@@ -2419,7 +2367,7 @@ elif selected =="RAPPORT CLIENT":
             st.markdown(f"""
             <div class="card">
                 <h3>Observation</h3>
-                <h2>{format_montant(obs_solde)} €</h2>
+                <h2>{format_montant(obs_solde)}</h2>
                 <p>Solde Restant</p>
                 <div class="delta {get_delta_class(obs_solde)}">{100 - obs_pourcentage:.0f}%</div>
             </div>
@@ -2443,7 +2391,7 @@ elif selected =="RAPPORT CLIENT":
             st.markdown(f"""
             <div class="card">
                 <h3>Suivi & Contrôle</h3>
-                <h2>{format_montant(suivi_budget)} €</h2>
+                <h2>{format_montant(suivi_budget)}</h2>
                 <p>CA Budget</p>
                 <div class="delta positive">100%</div>
             </div>
@@ -2453,7 +2401,7 @@ elif selected =="RAPPORT CLIENT":
             st.markdown(f"""
             <div class="card">
                 <h3>Suivi & Contrôle</h3>
-                <h2>{format_montant(suivi_reel)} €</h2>
+                <h2>{format_montant(suivi_reel)}</h2>
                 <p>CA Réalisé</p>
                 <div class="delta positive">{suivi_pourcentage:.0f}%</div>
             </div>
@@ -2463,7 +2411,7 @@ elif selected =="RAPPORT CLIENT":
             st.markdown(f"""
             <div class="card">
                 <h3>Suivi & Contrôle</h3>
-                <h2>{format_montant(suivi_solde)} €</h2>
+                <h2>{format_montant(suivi_solde)}</h2>
                 <p>Solde Restant</p>
                 <div class="delta {get_delta_class(suivi_solde)}">{100 - suivi_pourcentage:.0f}%</div>
             </div>
@@ -2770,6 +2718,8 @@ elif selected =="RAPPORT CLIENT":
 
         
     with tab3:
+        df_form = df_form_all.copy()
+        df_ta = df_ta_all.copy()
         # Création HTML dynamique depuis df_summary
         table_html = """
         <style>
@@ -2809,9 +2759,7 @@ elif selected =="RAPPORT CLIENT":
             <thead>
                 <tr>
         """
-        # --- Chargement de la feuille Participants (si ce n'est pas déjà fait)
-        if "calendar_file" in st.session_state:
-            df_participants = pd.read_excel(st.session_state["calendar_file"], sheet_name="BDD Participants 2026", header=2)
+        # La BDD a déjà été chargée avant les onglets, avec gestion de l'absence.
 
         # --- Mise en forme avec couleurs personnalisées
         def highlight_type(row):
@@ -2930,7 +2878,7 @@ elif selected =="RAPPORT CLIENT":
         table_html += "</tbody></table>"
 
         # --- Affichage final
-        st.markdown(table_html, unsafe_allow_html=True)
+        st.markdown(f'<div class="academy-table-scroll">{table_html}</div>', unsafe_allow_html=True)
 
         def style_table(df):
             row_colors = {
@@ -2989,12 +2937,14 @@ elif selected =="RAPPORT CLIENT":
             ta_obs_counts   = ta_obs[ta_obs["Groupe_clean"].isin(groupes_list)].groupby("Groupe_clean").size()
             ta_suivi_counts = ta_suivi[ta_suivi["Groupe_clean"].isin(groupes_list)].groupby("Groupe_clean").size()
 
-            participants_dict = get_nb_participants_par_groupe(df_participants, groupes_list)
+            participants_dict = get_nb_participations_par_groupe(df_participants, groupes_list)
+            unique_participants_dict = counts_by_group(df_participants, groupes_list, unique=True)
+            audience_metrics(df_form, df_participants)
 
             data_summary = {
                 "WSA 2026": [
                     "Nbre de formations", "Nombre de formateurs",
-                    "Nbre de TA Observation", "Nbre de TA Suivi", "Nombre de participants",
+                    "Nbre de TA Observation", "Nbre de TA Suivi", "Nombre de participations", "Nombre de participants uniques",
                 ]
             }
             for g in groupes_list:
@@ -3004,6 +2954,7 @@ elif selected =="RAPPORT CLIENT":
                     int(ta_obs_counts.get(g, 0)),
                     int(ta_suivi_counts.get(g, 0)),
                     int(participants_dict.get(g, 0)),
+                    int(unique_participants_dict.get(g, 0)) if df_participants is not None else "—",
                 ]
 
             data_summary["TOTAL"] = [
@@ -3011,7 +2962,8 @@ elif selected =="RAPPORT CLIENT":
                 int(df_form[df_form["Groupe_clean"].isin(groupes_list)]["Formateur 1"].nunique()),
                 int(ta_obs[ta_obs["Groupe_clean"].isin(groupes_list)].shape[0]),
                 int(ta_suivi[ta_suivi["Groupe_clean"].isin(groupes_list)].shape[0]),
-                get_nb_participants_distinct_total_via_groupes(df_form, df_participants),
+                get_nb_participations_total_via_groupes(df_form, df_participants),
+                count_total(df_form, df_participants, unique=True) if df_participants is not None else "—",
             ]
 
             df_summary = pd.DataFrame(data_summary)
@@ -3071,7 +3023,7 @@ elif selected =="RAPPORT CLIENT":
             table_html += "</tbody></table>"
 
             # Affichage dans Streamlit
-            st.markdown(table_html, unsafe_allow_html=True)
+            st.markdown(f'<div class="academy-table-scroll">{table_html}</div>', unsafe_allow_html=True)
 
             # Extraction des données (assure-toi que les valeurs sont bien numériques)
             bu_cols = [col for col in df_budget.columns if col not in ["Type", "TOTAL"]]
